@@ -2,110 +2,113 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import sqlite3
-import plotly.express as px
-from io import BytesIO
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Corral Pro v6.0 - Historial", layout="wide")
-conn = sqlite3.connect('corral_v6.db', check_same_thread=False)
+# --- CONFIGURACIÓN ESTILO V.22 ---
+st.set_page_config(page_title="CORRAL V.22 - CONTROL TOTAL", layout="wide")
+
+# CONEXIÓN BASE DE DATOS
+conn = sqlite3.connect('corral_v22_limpio.db', check_same_thread=False)
 c = conn.cursor()
 
-# CREACIÓN DE TODAS LAS TABLAS DEL EXCEL
-c.execute('CREATE TABLE IF NOT EXISTS produccion (fecha TEXT, cantidad INTEGER)')
+# Tablas idénticas a tus hojas de Excel
+c.execute('CREATE TABLE IF NOT EXISTS produccion (fecha TEXT, huevos INTEGER, notas TEXT)')
 c.execute('CREATE TABLE IF NOT EXISTS ventas (fecha TEXT, cliente TEXT, producto TEXT, cantidad INTEGER, total REAL)')
 c.execute('CREATE TABLE IF NOT EXISTS gastos (fecha TEXT, concepto TEXT, importe REAL, categoria TEXT)')
-c.execute('CREATE TABLE IF NOT EXISTS bajas (fecha TEXT, tipo TEXT, total_perdido REAL)')
+c.execute('CREATE TABLE IF NOT EXISTS bajas (f_muerte TEXT, f_compra TEXT, tipo TEXT, dias INTEGER, total_baja REAL)')
 conn.commit()
 
-# --- LÓGICA DE PRECIOS ---
-def calcular_precio(producto, fecha_str):
-    fecha = datetime.strptime(fecha_str, '%Y-%m-%d')
+# --- LÓGICA DE PRECIOS (Config_Precios.csv) ---
+def calcular_precio_v22(producto, fecha_sel):
     if producto == "HUEVOS":
-        return 0.45 if fecha >= datetime(2026, 3, 7) else 0.3333
-    return 50.0 if producto == "POLLO" else 0.0
+        # Fecha de cambio según tu Excel: 7 de Marzo de 2026
+        fecha_cambio = datetime(2026, 3, 7).date()
+        return 0.45 if fecha_sel >= fecha_cambio else 0.333333
+    return 50.0 # Precio fijo POLLO
 
-# --- MENÚ LATERAL ---
-st.sidebar.title("🍀 Menú de Gestión")
-menu = st.sidebar.radio("Secciones:", 
-    ["📈 Histórico y Balance", "🥚 Producción", "💰 Ventas", "💊 Gastos y Veterinaria", "🌈 Bajas", "💾 Copia de Seguridad"])
+# --- NAVEGACIÓN ---
+menu = st.sidebar.radio("MENÚ V.22", ["📊 RESUMEN GENERAL", "🥚 REGISTRO PRODUCCIÓN", "💰 REGISTRO VENTAS", "💸 GASTOS E INVERSIÓN", "🌈 REGISTRO DE BAJAS"])
 
-# --- 1. HISTÓRICO Y BALANCE (LA PARTE QUE FALTABA) ---
-if menu == "📈 Histórico y Balance":
-    st.title("Histórico de Saldo y Rendimiento")
+# --- 1. RESUMEN GENERAL (Dashboard) ---
+if menu == "📊 RESUMEN GENERAL":
+    st.title("📊 Resumen Financiero y Stock")
     
-    # Datos para el balance
-    ingresos = pd.read_sql("SELECT fecha, total as importe, 'Venta' as tipo FROM ventas", conn)
-    egresos = pd.read_sql("SELECT fecha, -importe as importe, 'Gasto' as tipo FROM gastos", conn)
+    # Cálculos
+    ventas_tot = pd.read_sql("SELECT SUM(total) FROM ventas", conn).iloc[0,0] or 0.0
+    gastos_tot = pd.read_sql("SELECT SUM(importe) FROM gastos", conn).iloc[0,0] or 0.0
+    bajas_tot = pd.read_sql("SELECT SUM(total_baja) FROM bajas", conn).iloc[0,0] or 0.0
     
-    # Combinar para gráfico de saldo
-    historico = pd.concat([ingresos, egresos]).sort_values('fecha')
-    if not historico.empty:
-        historico['Saldo Acumulado'] = historico['importe'].cumsum()
-        fig_saldo = px.line(historico, x='fecha', y='Saldo Acumulado', title="Evolución del Saldo Neto (Dinero Real)")
-        st.plotly_chart(fig_saldo, use_container_width=True)
+    saldo_real = ventas_tot - gastos_tot - bajas_tot
     
-    # Resumen de gastos por categoría
-    st.subheader("Análisis de Gastos")
-    df_gastos_pie = pd.read_sql("SELECT categoria, SUM(importe) as total FROM gastos GROUP BY categoria", conn)
-    if not df_gastos_pie.empty:
-        fig_pie = px.pie(df_gastos_pie, values='total', names='categoria', title="¿En qué te gastas el dinero?")
-        st.plotly_chart(fig_pie)
+    # Stock
+    prod_tot = pd.read_sql("SELECT SUM(huevos) FROM produccion", conn).iloc[0,0] or 0
+    vend_tot = pd.read_sql("SELECT SUM(cantidad) FROM ventas WHERE producto='HUEVOS'", conn).iloc[0,0] or 0
+    stock = prod_tot - vend_tot
 
-# --- 2. GASTOS Y VETERINARIA ---
-elif menu == "💊 Gastos y Veterinaria":
-    st.subheader("Registro de Gastos (Pienso, Medicinas, Equipo)")
-    with st.form("gasto_form"):
-        col1, col2 = st.columns(2)
-        f_g = col1.date_input("Fecha")
-        cat_g = col1.selectbox("Categoría", ["Pienso", "Veterinaria", "Inversión Equipo", "Animales", "Otros"])
-        con_g = col2.text_input("Concepto")
-        imp_g = col2.number_input("Importe (€)", min_value=0.0)
-        if st.form_submit_button("Añadir Gasto"):
-            c.execute("INSERT INTO gastos VALUES (?,?,?,?)", (f_g.strftime('%Y-%m-%d'), con_g, imp_g, cat_g))
+    col1, col2, col3 = st.columns(3)
+    col1.metric("SALDO NETO REAL", f"{round(saldo_real, 2)} €")
+    col2.metric("HUEVOS DISPONIBLES", f"{stock} uds")
+    col3.metric("INGRESOS VENTAS", f"{round(ventas_tot, 2)} €")
+
+    st.divider()
+    st.subheader("📋 Últimos movimientos registrados")
+    st.table(pd.read_sql("SELECT * FROM ventas ORDER BY fecha DESC LIMIT 5", conn))
+
+# --- 2. REGISTRO VENTAS (Con lógica de clientes) ---
+elif menu == "💰 REGISTRO VENTAS":
+    st.subheader("💰 Nueva Venta a Cliente")
+    with st.form("venta"):
+        f = st.date_input("Fecha de venta")
+        cli = st.text_input("Cliente (paco, antonio, pedro...)")
+        prod = st.selectbox("Producto", ["HUEVOS", "POLLO"])
+        cant = st.number_input("Cantidad", min_value=1, step=1)
+        
+        pre_uni = calcular_precio_v22(prod, f)
+        total_v = cant * pre_uni
+        
+        st.info(f"Precio Unitario: {round(pre_uni, 4)}€ | TOTAL: {round(total_v, 2)}€")
+        
+        if st.form_submit_button("Guardar Venta"):
+            c.execute("INSERT INTO ventas VALUES (?,?,?,?,?)", (f.strftime('%d/%m/%Y'), cli, prod, cant, total_v))
             conn.commit()
-            st.success("Gasto registrado")
+            st.success("Venta guardada")
 
-    st.write("### Últimos Gastos")
-    st.dataframe(pd.read_sql("SELECT * FROM gastos ORDER BY fecha DESC", conn))
+# --- 3. REGISTRO BAJAS (Con cálculo de días) ---
+elif menu == "🌈 REGISTRO DE BAJAS":
+    st.subheader("🌈 Registro de Bajas y Mortalidad")
+    with st.form("baja"):
+        f_m = st.date_input("Fecha de Muerte")
+        f_c = st.date_input("Fecha de Compra")
+        tipo = st.selectbox("Tipo de animal", ["gallina", "pollo"])
+        inv_ini = st.number_input("Inversión inicial (€)", value=7.42 if tipo=="gallina" else 2.5)
+        
+        if st.form_submit_button("Registrar Baja"):
+            dias = (f_m - f_c).days
+            # Coste de pienso acumulado según tu Excel
+            pienso_diario = 0.05 if tipo == "gallina" else 0.07
+            total_perdida = inv_ini + (dias * pienso_diario)
+            
+            c.execute("INSERT INTO bajas VALUES (?,?,?,?,?)", (f_m.strftime('%d/%m/%Y'), f_c.strftime('%d/%m/%Y'), tipo, dias, total_perdida))
+            conn.commit()
+            st.error(f"Baja registrada. Pérdida total: {round(total_perdida, 2)}€")
 
-# --- 3. PRODUCCIÓN, VENTAS Y BAJAS (Siguen igual que antes pero optimizados) ---
-elif menu == "🥚 Producción":
-    st.subheader("Recogida Diaria")
+# --- 4. PRODUCCIÓN Y GASTOS (Similares a los anteriores) ---
+elif menu == "🥚 REGISTRO PRODUCCIÓN":
+    st.subheader("🥚 Producción Diaria")
     f_p = st.date_input("Fecha")
-    c_p = st.number_input("Huevos recogidos", min_value=0)
+    cant_p = st.number_input("Huevos recogidos", min_value=0)
     if st.button("Guardar"):
-        c.execute("INSERT INTO produccion VALUES (?,?)", (f_p.strftime('%Y-%m-%d'), c_p))
+        c.execute("INSERT INTO produccion VALUES (?,?,?)", (f_p.strftime('%d/%m/%Y'), cant_p, ""))
         conn.commit()
+        st.success("Guardado")
 
-elif menu == "💰 Ventas":
-    st.subheader("Nueva Venta")
-    f_v = st.date_input("Fecha")
-    cli = st.text_input("Cliente")
-    prod = st.selectbox("Producto", ["HUEVOS", "POLLO"])
-    cant = st.number_input("Cantidad", min_value=1)
-    precio = calcular_precio(prod, f_v.strftime('%Y-%m-%d'))
-    total = round(cant * precio, 2)
-    st.write(f"Total: **{total} €**")
-    if st.button("Registrar Venta"):
-        c.execute("INSERT INTO ventas VALUES (?,?,?,?,?)", (f_v.strftime('%Y-%m-%d'), cli, prod, cant, total))
-        conn.commit()
-        st.balloons()
-
-elif menu == "🌈 Bajas":
-    st.subheader("Registro de Bajas")
-    f_b = st.date_input("Fecha")
-    t_b = st.selectbox("Tipo", ["Gallina", "Pollo"])
-    p_b = st.number_input("Pérdida (Coste animal + Pienso)", min_value=0.0)
-    if st.button("Registrar Baja"):
-        c.execute("INSERT INTO bajas VALUES (?,?,?)", (f_b.strftime('%Y-%m-%d'), t_b, p_b))
-        c.execute("INSERT INTO gastos VALUES (?,?,?,?)", (f_b.strftime('%Y-%m-%d'), f"BAJA: {t_b}", p_b, "Bajas"))
-        conn.commit()
-
-elif menu == "💾 Copia de Seguridad":
-    st.subheader("Exportar a Excel")
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        pd.read_sql('SELECT * FROM produccion', conn).to_excel(writer, sheet_name='Produccion')
-        pd.read_sql('SELECT * FROM ventas', conn).to_excel(writer, sheet_name='Ventas')
-        pd.read_sql('SELECT * FROM gastos', conn).to_excel(writer, sheet_name='Economia')
-    st.download_button("Descargar mi Excel", output.getvalue(), "corral_completo.xlsx")
+elif menu == "💸 GASTOS E INVERSIÓN":
+    st.subheader("💸 Gastos, Pienso y Veterinaria")
+    with st.form("gasto"):
+        f_g = st.date_input("Fecha")
+        cat_g = st.selectbox("Categoría", ["Inversión", "Pienso", "Veterinaria", "Otros"])
+        con_g = st.text_input("Concepto")
+        imp_g = st.number_input("Importe (€)", min_value=0.0)
+        if st.form_submit_button("Anotar Gasto"):
+            c.execute("INSERT INTO gastos VALUES (?,?,?,?)", (f_g.strftime('%d/%m/%Y'), con_g, imp_g, cat_g))
+            conn.commit()
+            st.success("Gasto anotado")

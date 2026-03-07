@@ -30,7 +30,6 @@ if c.fetchone()[0] == 0:
 # --- MOTOR DE PRECIOS V.22 ---
 def get_precio_v22(producto, fecha_sel):
     if producto == "HUEVOS":
-        # Umbral 7 de Marzo 2026
         limite = datetime(2026, 3, 7).date()
         return 0.45 if fecha_sel >= limite else 0.333333
     return 50.0
@@ -51,30 +50,47 @@ if menu == "📊 DASHBOARD":
     col2.metric("STOCK HUEVOS", f"{int(prod - vend)} uds")
     col3.metric("INGRESOS VENTAS", f"{round(ing, 2)} €")
 
-# --- 2. REGISTRAR VENTA (Mantenido) ---
+# --- 2. REGISTRAR VENTA ---
 elif menu == "💰 REGISTRAR VENTA":
-    st.title("💰 Nueva Venta a Cliente")
+    st.title("💰 Nueva Venta")
     with st.form("f_venta", clear_on_submit=True):
         f = st.date_input("Fecha", datetime.now())
-        cli = st.text_input("Cliente (paco, antonio, pedro...)")
+        cli = st.text_input("Cliente")
         prod = st.selectbox("Producto", ["HUEVOS", "POLLO"])
         cant = st.number_input("Cantidad", min_value=1, step=1)
-        
         p_u = get_precio_v22(prod, f)
-        total_v = cant * p_u
-        st.write(f"**Precio Unitario Aplicado:** {round(p_u, 3)}€ | **Total:** {round(total_v, 2)}€")
-        
         if st.form_submit_button("✅ Guardar Venta"):
-            c.execute("INSERT INTO ventas (fecha, cliente, producto, cantidad, total) VALUES (?,?,?,?,?)", 
-                      (f.strftime('%d/%m/%Y'), cli, prod, cant, total_v))
+            total_v = cant * p_u
+            c.execute("INSERT INTO ventas (fecha, cliente, producto, cantidad, total) VALUES (?,?,?,?,?)", (f.strftime('%d/%m/%Y'), cli, prod, cant, total_v))
             conn.commit()
-            st.success(f"Venta registrada para {cli}")
+            st.success(f"Venta de {round(total_v, 2)}€ registrada.")
 
-# --- 3. PRODUCCIÓN ---
+# --- 3. PRODUCCIÓN (LÍNEA DEL ERROR CORREGIDA) ---
 elif menu == "🥚 PRODUCCIÓN":
     st.title("🥚 Registro de Huevos")
-    with st.form("f_prod"):
+    with st.form("f_prod", clear_on_submit=True):
         f = st.date_input("Fecha")
         h = st.number_input("Huevos recogidos", min_value=0, step=1)
         if st.form_submit_button("Guardar"):
-            c.execute("INSERT INTO produccion (fecha, huevos) VALUES (?,?)", (f.
+            # Aquí estaba el paréntesis sin cerrar:
+            c.execute("INSERT INTO produccion (fecha, huevos) VALUES (?,?)", (f.strftime('%d/%m/%Y'), h))
+            conn.commit()
+            st.success("Producción anotada")
+
+# --- 4. GASTOS ---
+elif menu == "💸 GASTOS":
+    st.title("💸 Historial de Gastos")
+    df_g = pd.read_sql("SELECT id, fecha, concepto, importe, categoria FROM gastos ORDER BY id ASC", conn)
+    st.table(df_g)
+
+# --- 5. MANTENIMIENTO ---
+elif menu == "🛠️ MANTENIMIENTO":
+    st.title("🛠️ Borrar Registros")
+    tabla = st.selectbox("Selecciona tabla:", ["ventas", "produccion", "gastos"])
+    df_m = pd.read_sql(f"SELECT * FROM {tabla} ORDER BY id DESC", conn)
+    st.dataframe(df_m, use_container_width=True)
+    id_del = st.number_input("ID a borrar:", min_value=0, step=1)
+    if st.button("❌ Borrar"):
+        c.execute(f"DELETE FROM {tabla} WHERE id = ?", (id_del,))
+        conn.commit()
+        st.rerun()

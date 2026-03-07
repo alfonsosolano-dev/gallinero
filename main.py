@@ -4,146 +4,149 @@ import sqlite3
 from datetime import datetime
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="CORRAL V.22 - SISTEMA INTEGRAL", layout="wide")
+st.set_page_config(page_title="CORRAL V.22 - CONTROL ANALÍTICO", layout="wide")
 
-# CONEXIÓN SEGURO A BASE DE DATOS
+# CONEXIÓN Y ESTRUCTURA DE TABLAS
 conn = sqlite3.connect('corral_v22_final.db', check_same_thread=False)
 c = conn.cursor()
 
-# 1. ASEGURAR TODAS LAS TABLAS (Estructura Completa)
-c.execute('CREATE TABLE IF NOT EXISTS gastos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, concepto TEXT, importe REAL, categoria TEXT)')
-c.execute('CREATE TABLE IF NOT EXISTS ventas (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, cliente TEXT, producto TEXT, cantidad INTEGER, precio_ud REAL, total REAL)')
-c.execute('CREATE TABLE IF NOT EXISTS produccion (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, huevos INTEGER)')
+# Asegurar que las tablas tengan todas las columnas necesarias para la analítica
+c.execute('''CREATE TABLE IF NOT EXISTS gastos 
+             (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, concepto TEXT, importe REAL, categoria TEXT, especie TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS ventas 
+             (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, cliente TEXT, producto TEXT, cantidad INTEGER, precio_ud REAL, total REAL, especie TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS produccion 
+             (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, tipo TEXT, cantidad INTEGER, especie TEXT)''')
 conn.commit()
 
-# --- CARGA AUTOMÁTICA DE GASTOS INICIALES (Solo si está vacío) ---
-c.execute("SELECT count(*) FROM gastos")
-if c.fetchone()[0] == 0:
-    gastos_base = [
-        ('02/02/2026', 'Equipo Total (Inversión Inicial)', 62.0, 'Inversión'),
-        ('21/02/2026', '7 Gallinas', 52.0, 'Inversión'),
-        ('21/02/2026', '4 Pollos', 10.0, 'Inversión'),
-        ('10/03/2026', 'Gallina Parda', 8.5, 'Inversión'),
-        ('15/03/2026', 'Pienso y Nutrición', 33.25, 'Pienso')
-    ]
-    c.executemany("INSERT INTO gastos (fecha, concepto, importe, categoria) VALUES (?,?,?,?)", gastos_base)
-    conn.commit()
-
-# --- FUNCIONES DE LÓGICA ---
-def get_precio_sugerido(producto, fecha_sel):
-    if producto == "HUEVOS":
-        limite = datetime(2026, 3, 7).date()
-        return 0.45 if fecha_sel >= limite else 0.3333
-    return 50.0
-
-def calcular_coste_pollo_estimado():
-    # Inversión (2.50) + Pienso diario (0.07 * 90 días aprox)
-    return 2.50 + (90 * 0.07)
+# --- LÓGICA DE PRECIOS SUGERIDOS ---
+def get_precio_sugerido(prod_input, fecha_sel):
+    p = prod_input.upper()
+    if "HUEVO" in p and "GALLINA" in p:
+        return 0.45 if fecha_sel >= datetime(2026, 3, 7).date() else 0.3333
+    elif "HUEVO" in p and "CODORNIZ" in p:
+        return 0.15
+    elif "POLLO" in p or "CARNE" in p:
+        return 50.0
+    return 1.0
 
 # --- MENÚ LATERAL ---
-st.sidebar.title("🚜 Gestión Corral V.22")
-menu = st.sidebar.radio("Ir a:", [
-    "📊 DASHBOARD", 
+st.sidebar.title("🚜 Panel de Control V.22")
+menu = st.sidebar.radio("Navegación:", [
+    "📊 DASHBOARD ANALÍTICO", 
     "💰 REGISTRAR VENTA", 
     "🥚 PRODUCCIÓN DIARIA", 
     "💸 GASTOS E INVERSIÓN", 
-    "📈 HISTÓRICO Y EVOLUCIÓN",
+    "📈 HISTÓRICO TOTAL",
     "🛠️ MANTENIMIENTO"
 ])
 
-# --- 1. DASHBOARD ---
-if menu == "📊 DASHBOARD":
-    st.title("📊 Resumen General de Situación")
-    ing = pd.read_sql("SELECT SUM(total) FROM ventas", conn).iloc[0,0] or 0.0
-    gas = pd.read_sql("SELECT SUM(importe) FROM gastos", conn).iloc[0,0] or 0.0
-    prod = pd.read_sql("SELECT SUM(huevos) FROM produccion", conn).iloc[0,0] or 0
-    vend = pd.read_sql("SELECT SUM(cantidad) FROM ventas WHERE producto='HUEVOS'", conn).iloc[0,0] or 0
+# --- 1. DASHBOARD ANALÍTICO (Rendimiento por Especie) ---
+if menu == "📊 DASHBOARD ANALÍTICO":
+    st.title("📊 Rentabilidad Comparada")
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("SALDO NETO REAL", f"{round(ing - gas, 2)} €")
-    col2.metric("HUEVOS EN STOCK", f"{int(prod - vend)} uds")
-    col3.metric("INGRESOS TOTALES", f"{round(ing, 2)} €")
+    # Datos globales
+    ing_t = pd.read_sql("SELECT SUM(total) FROM ventas", conn).iloc[0,0] or 0.0
+    gas_t = pd.read_sql("SELECT SUM(importe) FROM gastos", conn).iloc[0,0] or 0.0
+    
+    col_t1, col_t2 = st.columns(2)
+    col_t1.metric("SALDO NETO TOTAL", f"{round(ing_t - gas_t, 2)} €")
+    col_t2.metric("TOTAL INGRESOS", f"{round(ing_t, 2)} €")
     
     st.divider()
-    st.subheader("Distribución de Gastos")
-    df_gastos_pie = pd.read_sql("SELECT categoria, SUM(importe) as total FROM gastos GROUP BY categoria", conn)
-    if not df_gastos_pie.empty:
-        st.bar_chart(df_gastos_pie.set_index('categoria'))
+    
+    # Desglose por Especie
+    especies = ["Gallinas", "Pollos", "Codornices"]
+    cols = st.columns(3)
+    
+    for i, esp in enumerate(especies):
+        with cols[i]:
+            st.subheader(f"🏷️ {esp}")
+            i_esp = pd.read_sql(f"SELECT SUM(total) FROM ventas WHERE especie='{esp}'", conn).iloc[0,0] or 0.0
+            g_esp = pd.read_sql(f"SELECT SUM(importe) FROM gastos WHERE especie='{esp}'", conn).iloc[0,0] or 0.0
+            
+            # Cálculo de stock de huevos si aplica
+            p_esp = pd.read_sql(f"SELECT SUM(cantidad) FROM produccion WHERE especie='{esp}' AND tipo LIKE 'HUEVO%'", conn).iloc[0,0] or 0
+            v_esp = pd.read_sql(f"SELECT SUM(cantidad) FROM ventas WHERE especie='{esp}' AND producto LIKE 'HUEVO%'", conn).iloc[0,0] or 0
+            
+            st.metric("Beneficio", f"{round(i_esp - g_esp, 2)} €")
+            st.write(f"**Ingresos:** {round(i_esp, 2)}€")
+            st.write(f"**Gastos:** {round(g_esp, 2)}€")
+            if esp != "Pollos":
+                st.write(f"**Stock Huevos:** {int(p_esp - v_esp)} uds")
 
-# --- 2. REGISTRAR VENTA (PRECIO MANUAL) ---
+# --- 2. REGISTRAR VENTA ---
 elif menu == "💰 REGISTRAR VENTA":
-    st.title("💰 Formulario de Ventas")
+    st.title("💰 Registrar Venta")
     with st.form("f_ventas", clear_on_submit=True):
         f_v = st.date_input("Fecha", datetime.now())
-        cli = st.text_input("Nombre del Cliente")
-        pro = st.selectbox("Producto", ["HUEVOS", "POLLO"])
+        esp_v = st.selectbox("Especie", ["Gallinas", "Pollos", "Codornices"])
+        tipo_v = st.selectbox("Producto", ["HUEVOS", "CARNE / AVE VIVA"])
+        cli = st.text_input("Cliente")
         can = st.number_input("Cantidad", min_value=1, step=1)
         
-        pre_sug = get_precio_sugerido(pro, f_v)
-        pre_final = st.number_input("Precio Unitario (€) - Editable", value=float(pre_sug), format="%.4f")
+        nombre_prod = f"{tipo_v} {esp_v.upper()}"
+        pre_sug = get_precio_sugerido(nombre_prod, f_v)
+        pre_final = st.number_input("Precio Unidad (€)", value=float(pre_sug), format="%.4f")
         
-        if pro == "POLLO":
-            coste_p = calcular_coste_pollo_estimado()
-            st.info(f"💡 Coste de crianza estimado: {coste_p}€ | Margen: {round(pre_final - coste_p, 2)}€")
-            
-        if st.form_submit_button("✅ Registrar Venta"):
+        if st.form_submit_button("✅ Guardar Venta"):
             total_v = can * pre_final
-            c.execute("INSERT INTO ventas (fecha, cliente, producto, cantidad, precio_ud, total) VALUES (?,?,?,?,?,?)", 
-                      (f_v.strftime('%d/%m/%Y'), cli, pro, can, pre_final, total_v))
+            c.execute("INSERT INTO ventas (fecha, cliente, producto, cantidad, precio_ud, total, especie) VALUES (?,?,?,?,?,?,?)", 
+                      (f_v.strftime('%d/%m/%Y'), cli, nombre_prod, can, pre_final, total_v, esp_v))
             conn.commit()
-            st.success(f"Venta guardada: {total_v}€")
+            st.success(f"Venta de {nombre_prod} anotada.")
 
 # --- 3. PRODUCCIÓN DIARIA ---
 elif menu == "🥚 PRODUCCIÓN DIARIA":
-    st.title("🥚 Registro de Puesta")
+    st.title("🥚 Producción Diaria")
     with st.form("f_prod", clear_on_submit=True):
         f_p = st.date_input("Fecha")
-        h_p = st.number_input("Huevos recogidos", min_value=0, step=1)
+        esp_p = st.selectbox("Especie", ["Gallinas", "Pollos", "Codornices"])
+        tipo_p = st.selectbox("Tipo", ["HUEVOS", "PESO CARNE (kg)", "UNIDADES"])
+        cant_p = st.number_input("Cantidad", min_value=0, step=1)
+        
         if st.form_submit_button("💾 Guardar"):
-            c.execute("INSERT INTO produccion (fecha, huevos) VALUES (?,?)", (f_p.strftime('%d/%m/%Y'), h_p))
+            nombre_p = f"{tipo_p} {esp_p.upper()}"
+            c.execute("INSERT INTO produccion (fecha, tipo, cantidad, especie) VALUES (?,?,?,?)", 
+                      (f_p.strftime('%d/%m/%Y'), nombre_p, cant_p, esp_p))
             conn.commit()
-            st.success("Producción anotada correctamente.")
+            st.success(f"Registrado: {cant_p} {nombre_p}")
 
 # --- 4. GASTOS E INVERSIÓN ---
 elif menu == "💸 GASTOS E INVERSIÓN":
-    st.title("💸 Gestión de Salidas de Dinero")
+    st.title("💸 Control de Gastos")
     with st.form("f_gastos", clear_on_submit=True):
         f_g = st.date_input("Fecha")
-        cat_g = st.selectbox("Categoría", ["Pienso", "Inversión", "Otros"])
-        con_g = st.text_input("Concepto (Ej: Saco 25kg, 3 Gallinas...)")
+        esp_g = st.selectbox("Asignar a:", ["Gallinas", "Pollos", "Codornices", "General"])
+        cat_g = st.selectbox("Categoría", ["Pienso", "Compra Animales", "Equipamiento", "Otros"])
+        con_g = st.text_input("Concepto")
         imp_g = st.number_input("Importe (€)", min_value=0.0)
-        if st.form_submit_button("💾 Registrar Gasto"):
-            c.execute("INSERT INTO gastos (fecha, concepto, importe, categoria) VALUES (?,?,?,?)", 
-                      (f_g.strftime('%d/%m/%Y'), con_g, imp_g, cat_g))
+        
+        if st.form_submit_button("💾 Guardar Gasto"):
+            c.execute("INSERT INTO gastos (fecha, concepto, importe, categoria, especie) VALUES (?,?,?,?,?)", 
+                      (f_g.strftime('%d/%m/%Y'), con_g, imp_g, cat_g, esp_g))
             conn.commit()
-            st.rerun()
+            st.success("Gasto registrado.")
     
-    st.subheader("Historial de Gastos")
-    df_g_list = pd.read_sql("SELECT id, fecha, concepto, importe, categoria FROM gastos ORDER BY id DESC", conn)
-    st.table(df_g_list)
+    st.subheader("Últimos Movimientos")
+    df_g = pd.read_sql("SELECT fecha, especie, concepto, importe FROM gastos ORDER BY id DESC LIMIT 10", conn)
+    st.table(df_g)
 
-# --- 5. HISTÓRICO Y EVOLUCIÓN ---
-elif menu == "📈 HISTÓRICO Y EVOLUCIÓN":
-    st.title("📈 Análisis de Datos")
-    t1, t2 = st.tabs(["Histórico Ventas", "Evolución Producción"])
-    with t1:
-        df_v_hist = pd.read_sql("SELECT * FROM ventas ORDER BY id ASC", conn)
-        st.dataframe(df_v_hist, use_container_width=True)
-    with t2:
-        df_p_hist = pd.read_sql("SELECT fecha, huevos FROM produccion ORDER BY id ASC", conn)
-        if not df_p_hist.empty:
-            st.line_chart(df_p_hist.set_index('fecha'))
-        st.dataframe(df_p_hist, use_container_width=True)
+# --- 5. HISTÓRICO TOTAL ---
+elif menu == "📈 HISTÓRICO TOTAL":
+    st.title("📈 Listado Maestro")
+    tabla = st.radio("Ver tabla de:", ["Ventas", "Gastos", "Producción"], horizontal=True)
+    query = f"SELECT * FROM {tabla.lower()}"
+    st.dataframe(pd.read_sql(query, conn), use_container_width=True)
 
-# --- 6. MANTENIMIENTO (BORRADO) ---
+# --- 6. MANTENIMIENTO ---
 elif menu == "🛠️ MANTENIMIENTO":
-    st.title("🛠️ Editor de Registros")
-    tab_sel = st.selectbox("Tabla a gestionar:", ["ventas", "produccion", "gastos"])
-    df_man = pd.read_sql(f"SELECT * FROM {tab_sel} ORDER BY id DESC", conn)
-    st.dataframe(df_man, use_container_width=True)
-    id_del = st.number_input("ID del registro a borrar:", min_value=0, step=1)
-    if st.button("❌ Eliminar Permanentemente"):
-        c.execute(f"DELETE FROM {tab_sel} WHERE id = ?", (id_del,))
+    st.title("🛠️ Editor")
+    t_del = st.selectbox("Tabla:", ["ventas", "produccion", "gastos"])
+    df_m = pd.read_sql(f"SELECT * FROM {t_del} ORDER BY id DESC", conn)
+    st.dataframe(df_m)
+    id_del = st.number_input("ID a borrar:", min_value=0, step=1)
+    if st.button("❌ Eliminar Registro"):
+        c.execute(f"DELETE FROM {t_del} WHERE id = ?", (id_del,))
         conn.commit()
-        st.warning(f"ID {id_del} borrado.")
         st.rerun()

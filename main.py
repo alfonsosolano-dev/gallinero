@@ -162,7 +162,3 @@ if not df.empty:
 df.to_excel(writer, sheet_name=tabla, index=False)
 st.success(f"✅ Backup completo generado en {backup_file}")
 st.download_button("📥 Descargar Backup", data=open(backup_file, 'rb').read(), file_name='backup_completo.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-
-# --- NOTA ---
-
-# Todas las demás secciones (Rentabilidad, Crecimiento, Puesta, Gastos, Ventas, Alta, Salud, Plan Navidad) se mantienen con confirmaciones, alertas y gráficas, adaptadas a la carpeta ./data para Streamlit Cloud.

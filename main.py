@@ -219,3 +219,52 @@ elif menu == "🛠️ ADMIN":
         if st.button("🗑️ BORRAR REGISTRO"):
             c.execute(f"DELETE FROM {tab} WHERE id=?", (id_b,))
             conn.commit(); st.rerun()
+# --- (Busca la sección de CRECIMIENTO y añade esta nueva lógica de REPOSICIÓN) ---
+
+elif menu == "🍗 CRECIMIENTO":
+    st.title("📈 Seguimiento y Planificación de Reposición")
+    df_l = cargar('lotes')
+    
+    if not df_l.empty:
+        for _, row in df_l[df_l['estado']=='Activo'].iterrows():
+            f_ent = datetime.strptime(row['fecha'], '%d/%m/%Y')
+            edad_t = (datetime.now() - f_ent).days + int(row['edad_inicial'])
+            
+            # --- OBJETIVOS DINÁMICOS POR RAZA ---
+            raza = row['raza'].upper()
+            if row['especie'] == 'Codornices': meta = 45
+            elif row['especie'] == 'Pollos':
+                meta = 60 if "BLANCO" in raza else 110
+            else: # Gallinas
+                if "ROJA" in raza: meta = 140
+                elif "CHOCOLATE" in raza: meta = 180
+                else: meta = 160
+            
+            prog = min(1.0, edad_t/meta)
+            
+            with st.expander(f"{row['especie']} {row['raza']} - {edad_t} días", expanded=True):
+                st.progress(prog)
+                
+                # --- LÓGICA DE REPOSICIÓN (NAVIDAD / CICLOS) ---
+                if row['especie'] == 'Pollos' and prog > 0.7:
+                    st.warning(f"⚠️ **AVISO DE REPOSICIÓN:** Este lote está al {int(prog*100)}%. Deberías comprar el siguiente lote en 10 días para no quedarte sin carne.")
+                
+                if row['especie'] == 'Gallinas' and edad_t > 500: # Gallinas viejas
+                    st.info("💡 Estas gallinas se acercan a los 2 años. Planifica la compra de pollas nuevas en primavera para mantener la puesta en Navidad.")
+
+# --- NUEVA SECCIÓN: PLAN NAVIDAD ---
+elif menu == "🎄 PLAN NAVIDAD":
+    st.title("❄️ Preparación para Invierno/Navidad")
+    st.info("Las gallinas bajan la puesta en diciembre. Aquí tienes tu hoja de ruta:")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("💡 Iluminación")
+        st.write("Para tener huevos en Navidad, necesitas 14h de luz. Programa un reloj para que se encienda a las 6:00 AM.")
+    with col2:
+        st.subheader("🍗 Engorde Navideño")
+        st.write("Si quieres pollos para la cena de Navidad, debes darlos de alta a finales de Septiembre (si son camperos).")
+
+    # Botón para añadir recordatorio automático
+    if st.button("⏰ Programar aviso: Compra pollos para Navidad"):
+        st.success("Recordatorio fijado para el 20 de Septiembre")

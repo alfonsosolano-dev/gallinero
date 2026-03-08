@@ -10,7 +10,7 @@ st.set_page_config(page_title="CORRAL MAESTRO PRO", layout="wide")
 conn = sqlite3.connect('corral_final_consolidado.db', check_same_thread=False)
 c = conn.cursor()
 
-# Inicialización segura de la DB (no borra datos existentes)
+# Inicialización segura de la DB
 def inicializar_db():
     c.execute('''CREATE TABLE IF NOT EXISTS lotes (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, tipo_engorde TEXT, cantidad INTEGER, precio_ud REAL, estado TEXT, edad_inicial INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS gastos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, concepto TEXT, importe REAL, kilos REAL DEFAULT 0, categoria TEXT, raza TEXT)''')
@@ -114,21 +114,21 @@ elif menu == "🛠️ ADMIN":
             st.success("✅ Registro borrado correctamente")
             st.rerun()
 
-    # BOTÓN DE BACKUP SEGURO
+    # BOTÓN DE BACKUP COMPLETO
     st.divider()
-    st.subheader("💾 Backup de tablas")
-    if st.button("📥 Descargar Backup"):
-        for tabla in ['lotes','gastos','ventas','produccion']:
-            df_b = cargar(tabla)
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_b.to_excel(writer, index=False, sheet_name='Datos')
-            st.download_button(
-                label=f"Descargar backup {tabla}",
-                data=output.getvalue(),
-                file_name=f"backup_{tabla}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+    st.subheader("💾 Backup Completo de la Base de Datos")
+    if st.button("📥 Descargar Backup Completo"):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            for tabla in ['lotes','gastos','ventas','produccion']:
+                df_b = cargar(tabla)
+                df_b.to_excel(writer, index=False, sheet_name=tabla)
+        st.download_button(
+            label="📥 Descargar Backup Excel Completo",
+            data=output.getvalue(),
+            file_name=f"backup_corral_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 # --- 8. PUESTA ---
 elif menu == "🥚 PUESTA":

@@ -50,12 +50,17 @@ if menu == "📊 RENTABILIDAD":
 
     for i, esp in enumerate(["Gallinas", "Pollos", "Codornices"], 1):
         with tabs[i]:
-            g_e = df_g[df_g['categoria'].str.contains(esp, na=False)]['importe'].sum()
-            v_e = df_v[df_v['especie'] == esp]['total'].sum()
+            df_g['categoria'] = df_g['categoria'].str.lower()
+            df_v['especie'] = df_v['especie'].str.lower()
+            esp_lower = esp.lower()
+            g_e = df_g[df_g['categoria'].str.contains(esp_lower, na=False)]['importe'].sum()
+            v_e = df_v[df_v['especie'] == esp_lower]['total'].sum()
             st.subheader(f"Balance {esp}: {v_e - g_e:.2f}€")
-            p_data = df_p[df_p['especie'] == esp]
-            if not p_data.empty:
-                p_data['fecha'] = p_data['fecha'].astype(str)  # Corregir fechas
+            p_data = df_p[df_p['especie'].str.lower() == esp_lower]
+            if p_data.empty:
+                st.info("No hay producción registrada para esta especie aún")
+            else:
+                p_data['fecha'] = p_data['fecha'].astype(str)
                 st.plotly_chart(px.line(p_data, x='fecha', y='cantidad'))
 
 # --- 4. CRECIMIENTO ---
@@ -87,7 +92,9 @@ elif menu == "💸 GASTOS (PIENSO)":
         kgs = st.number_input("Kilos", 0.0)
         if st.form_submit_button("✅"):
             c.execute("INSERT INTO gastos (fecha, concepto, importe, kilos, categoria, raza) VALUES (?,?,?,?,?,?)", (f.strftime('%d/%m/%Y'), con, imp, kgs, cat, "General"))
-            conn.commit(); st.rerun()
+            conn.commit()
+            st.success("✅ Gasto guardado correctamente")
+            st.rerun()
     st.dataframe(cargar('gastos'))
 
 # --- 6. PLAN NAVIDAD ---
@@ -113,7 +120,9 @@ elif menu == "🛠️ ADMIN":
         id_b = st.number_input("ID a borrar", 0)
         if st.button("🗑️ BORRAR REGISTRO"):
             c.execute(f"DELETE FROM {tab} WHERE id=?", (id_b,))
-            conn.commit(); st.rerun()
+            conn.commit()
+            st.success("✅ Registro borrado correctamente")
+            st.rerun()
 
 # --- 8. PUESTA ---
 elif menu == "🥚 PUESTA":
@@ -126,7 +135,9 @@ elif menu == "🥚 PUESTA":
     if st.button("Anotar"):
         especie = "Gallinas" if rz != "Codorniz" else "Codornices"
         c.execute("INSERT INTO produccion (fecha, raza, cantidad, especie) VALUES (?,?,?,?)", (f.strftime('%d/%m/%Y'), rz, can, especie))
-        conn.commit(); st.rerun()
+        conn.commit()
+        st.success("✅ Producción guardada correctamente")
+        st.rerun()
 
 # --- 9. VENTAS ---
 elif menu == "💰 VENTAS":
@@ -145,4 +156,6 @@ elif menu == "🐣 ALTA ANIMALES":
         e_ini = st.number_input("Edad inicial", 15)
         if st.form_submit_button("✅"):
             c.execute("INSERT INTO lotes (fecha, especie, raza, tipo_engorde, edad_inicial, cantidad, precio_ud, estado) VALUES (?,?,?,?,?,?,?,?)", (f.strftime('%d/%m/%Y'), esp, rz, "N/A", e_ini, can, pre, 'Activo'))
-            conn.commit(); st.rerun()
+            conn.commit()
+            st.success("✅ Lote guardado correctamente")
+            st.rerun()

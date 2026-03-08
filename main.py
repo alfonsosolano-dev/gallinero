@@ -20,11 +20,6 @@ def inicializar_db():
 
 inicializar_db()
 
-# Backup automático al iniciar la app
-for tabla in ['lotes','gastos','ventas','produccion']:
-    df_backup = pd.read_sql(f"SELECT * FROM {tabla}", conn)
-    df_backup.to_excel(f"backup_{tabla}_{datetime.now().strftime('%Y%m%d')}.xlsx", index=False)
-
 # Función para cargar tablas
 def cargar(tabla):
     try:
@@ -107,15 +102,10 @@ elif menu == "🎄 PLAN NAVIDAD":
 
 # --- 7. ADMIN ---
 elif menu == "🛠️ ADMIN":
-    st.title("🛠️ Administración y Copia de Seguridad")
+    st.title("🛠️ Administración")
     tab = st.selectbox("Seleccionar Tabla", ["lotes", "gastos", "ventas", "produccion"])
     df = cargar(tab)
     if not df.empty:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='Datos')
-        st.download_button(label="📥 DESCARGAR TABLA EN EXCEL", data=output.getvalue(), file_name=f"corral_{tab}_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        st.divider()
         st.dataframe(df)
         id_b = st.number_input("ID a borrar", 0)
         if st.button("🗑️ BORRAR REGISTRO"):
@@ -123,6 +113,22 @@ elif menu == "🛠️ ADMIN":
             conn.commit()
             st.success("✅ Registro borrado correctamente")
             st.rerun()
+
+    # BOTÓN DE BACKUP SEGURO
+    st.divider()
+    st.subheader("💾 Backup de tablas")
+    if st.button("📥 Descargar Backup"):
+        for tabla in ['lotes','gastos','ventas','produccion']:
+            df_b = cargar(tabla)
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_b.to_excel(writer, index=False, sheet_name='Datos')
+            st.download_button(
+                label=f"Descargar backup {tabla}",
+                data=output.getvalue(),
+                file_name=f"backup_{tabla}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 # --- 8. PUESTA ---
 elif menu == "🥚 PUESTA":

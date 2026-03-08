@@ -1,10 +1,47 @@
-import streamlit as st
-import pandas as pd
-import sqlite3
-import plotly.express as px
-import io
-import os
-from datetime import datetime, timedelta
+def inicializar_db():
+    conn = get_conn()
+    c = conn.cursor()
+    # 1. Crear tablas si no existen
+    c.execute('''CREATE TABLE IF NOT EXISTS lotes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT,
+        cantidad INTEGER, estado TEXT, edad_inicial INTEGER DEFAULT 0, usuario TEXT)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS gastos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, concepto TEXT, importe REAL,
+        kilos REAL DEFAULT 0, categoria TEXT, usuario TEXT)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS ventas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, producto TEXT,
+        total REAL, especie TEXT, usuario TEXT)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS produccion (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, raza TEXT,
+        cantidad REAL, especie TEXT, usuario TEXT)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS salud (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote_id INTEGER,
+        tipo TEXT, notas TEXT, usuario TEXT)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE, clave TEXT, rango TEXT)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS puesta_manual (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, lote_id INTEGER,
+        fecha_primera_puesta TEXT, usuario TEXT)''')
+
+    # 2. TRUCO PARA ACTUALIZAR TABLAS VIEJAS: Añadir columna 'usuario' si no existe
+    tablas = ['lotes', 'gastos', 'ventas', 'produccion', 'salud']
+    for t in tablas:
+        try:
+            c.execute(f"ALTER TABLE {t} ADD COLUMN usuario TEXT")
+        except sqlite3.OperationalError:
+            # Si ya existe la columna, no hace nada
+            pass
+    
+    # Usuario maestro
+    c.execute("INSERT OR IGNORE INTO usuarios (nombre, clave, rango) VALUES (?,?,?)", ('admin', '1234', 'Admin'))
+    conn.commit()
+    conn.close()
 
 # ====================== 1. CONFIGURACIÓN Y BASE DE DATOS ======================
 st.set_page_config(page_title="CORRAL MAESTRO PRO", layout="wide", page_icon="🐓")
@@ -290,3 +327,4 @@ elif menu == "📊 RENTABILIDAD":
     df_g = cargar('gastos'); df_v = cargar('ventas')
     if not df_g.empty:
         st.plotly_chart(px.pie(df_g, values='importe', names='categoria', title="¿En qué gastamos más?"))
+

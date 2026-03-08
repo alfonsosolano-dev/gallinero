@@ -6,27 +6,16 @@ import io
 from datetime import datetime
 
 # --- 1. CONFIGURACIÓN Y BASE DE DATOS ---
-st.set_page_config(page_title="CORRAL ESTRATÉGICO V.52", layout="wide")
-conn = sqlite3.connect('corral_v52_final.db', check_same_thread=False)
+st.set_page_config(page_title="CORRAL INTELIGENTE V.56", layout="wide")
+conn = sqlite3.connect('corral_v56_final.db', check_same_thread=False)
 c = conn.cursor()
 
 def inicializar_db():
-    # Creamos las tablas necesarias si no existen
-    c.execute('''CREATE TABLE IF NOT EXISTS lotes 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, 
-                  tipo_engorde TEXT, cantidad INTEGER, precio_ud REAL, estado TEXT, 
-                  edad_inicial INTEGER DEFAULT 0)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS gastos 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, concepto TEXT, 
-                  importe REAL, categoria TEXT, raza TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS ventas 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, producto TEXT, 
-                  cantidad INTEGER, total REAL, raza TEXT, especie TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS produccion 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, raza TEXT, 
-                  cantidad REAL, especie TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS lotes (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, tipo_engorde TEXT, cantidad INTEGER, precio_ud REAL, estado TEXT, edad_inicial INTEGER DEFAULT 0)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS gastos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, concepto TEXT, importe REAL, categoria TEXT, raza TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS ventas (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, producto TEXT, cantidad INTEGER, total REAL, raza TEXT, especie TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS produccion (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, raza TEXT, cantidad REAL, especie TEXT)''')
     
-    # Gasto automático del material del 21 de febrero
     c.execute("SELECT COUNT(*) FROM gastos WHERE concepto LIKE '%Material%'")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO gastos (fecha, concepto, importe, categoria, raza) VALUES (?,?,?,?,?)",
@@ -36,235 +25,131 @@ def inicializar_db():
 inicializar_db()
 
 def cargar(tabla):
-    try:
-        return pd.read_sql(f"SELECT * FROM {tabla} ORDER BY id DESC", conn)
-    except:
-        return pd.DataFrame()
+    try: return pd.read_sql(f"SELECT * FROM {tabla} ORDER BY id DESC", conn)
+    except: return pd.DataFrame()
 
 # --- 2. MENÚ LATERAL ---
-st.sidebar.title("🦆 CONTROL DE CORRAL")
-menu = st.sidebar.radio("MENÚ PRINCIPAL", 
-    ["📊 RENTABILIDAD", "🍗 CRECIMIENTO", "🥚 PUESTA", "💸 GASTOS", "💰 VENTAS", "🐣 ALTA ANIMALES", "🛠️ ADMIN"])
+st.sidebar.title("🦆 MENÚ PRINCIPAL")
+menu = st.sidebar.radio("IR A:", ["📊 RENTABILIDAD", "🍗 CRECIMIENTO", "🥚 PUESTA", "💸 GASTOS", "💰 VENTAS", "🐣 ALTA ANIMALES", "🎄 PLAN NAVIDAD", "🛠️ ADMIN"])
 
-# --- 3. SECCIÓN: RENTABILIDAD (ANÁLISIS POR ESPECIE) ---
+# --- 3. SECCIÓN: RENTABILIDAD (POR PESTAÑAS) ---
 if menu == "📊 RENTABILIDAD":
-    st.title("📊 Análisis de Rentabilidad")
-    df_l = cargar('lotes')
-    df_g = cargar('gastos')
-    df_v = cargar('ventas')
+    st.title("📊 Análisis Financiero Detallado")
+    df_l = cargar('lotes'); df_g = cargar('gastos'); df_v = cargar('ventas'); df_p = cargar('produccion')
 
-    if not df_l.empty:
-        st.subheader("💰 Rentabilidad por Especie")
-        resumen_especies = []
-        for esp in ["Pollos", "Gallinas", "Codornices"]:
-            # Sumamos gastos de compra (lotes) + pienso/salud (gastos)
-            coste_animales = df_g[df_g['raza'].str.contains(esp, case=False, na=False)]['importe'].sum()
-            coste_pienso = df_g[df_g['categoria'].str.contains(esp, case=False, na=False)]['importe'].sum()
-            gastos_tot = coste_animales + (0 if esp == "Material" else coste_pienso)
-            
-            # Ventas por especie
-            ventas_tot = df_v[df_v['especie'] == esp]['total'].sum() if 'especie' in df_v.columns else 0
-            
-            if gastos_tot > 0 or ventas_tot > 0:
-                resumen_especies.append({
-                    "Especie": esp,
-                    "Total Gastos": f"{gastos_tot:.2f}€",
-                    "Total Ventas": f"{ventas_tot:.2f}€",
-                    "Resultado Neto": f"{ventas_tot - gastos_tot:.2f}€"
-                })
-        
-        if resumen_especies:
-            st.table(pd.DataFrame(resumen_especies))
-        
-        st.divider()
-        st.subheader("🎯 Coste Unitario por Lote (Engorde)")
-        datos_coste = []
-        for _, lote in df_l[df_l['estado']=='Activo'].iterrows():
-            c_compra = lote['cantidad'] * lote['precio_ud']
-            c_pienso = df_g[(df_g['raza'] == lote['raza']) & (df_g['categoria'].str.contains('Pienso', na=False))]['importe'].sum()
-            total = c_compra + c_pienso
-            coste_ud = total / lote['cantidad']
-            datos_coste.append({
-                "Lote": f"{lote['especie']} {lote['raza']}",
-                "Inversión": f"{total:.2f}€",
-                "Coste x Animal": f"{coste_ud:.2f}€"
-            })
-        st.dataframe(pd.DataFrame(datos_coste), use_container_width=True)
-    else:
-        st.info("Registra animales en 'ALTA ANIMALES' para ver la rentabilidad.")
+    tab_gen, tab_gall, tab_poll, tab_cod = st.tabs(["🌍 General", "🐔 Gallinas", "🐥 Pollos", "🐦 Codornices"])
 
-# --- 4. SECCIÓN: CRECIMIENTO ---
+    with tab_gen:
+        st.subheader("Balance Global")
+        g_tot = df_g['importe'].sum(); v_tot = df_v['total'].sum()
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Gastos Totales", f"{g_tot:.2f}€")
+        col2.metric("Ventas Totales", f"{v_tot:.2f}€")
+        col3.metric("Beneficio", f"{v_tot - g_tot:.2f}€")
+        if not df_g.empty:
+            st.plotly_chart(px.pie(df_g, values='importe', names='categoria', title="¿En qué gastamos?"))
+
+    especies_list = [(tab_gall, "Gallinas"), (tab_poll, "Pollos"), (tab_cod, "Codornices")]
+    for pestaña, esp_nombre in especies_list:
+        with pestaña:
+            st.header(f"Control de {esp_nombre}")
+            g_esp = df_g[df_g['raza'].str.contains(esp_nombre, case=False, na=False) | df_g['categoria'].str.contains(esp_nombre, case=False, na=False)]['importe'].sum()
+            v_esp = df_v[df_v['especie'] == esp_nombre]['total'].sum()
+            st.subheader(f"Balance {esp_nombre}: {v_esp - g_esp:.2f}€")
+            
+            p_esp = df_p[df_p['especie'] == esp_nombre]
+            if not p_esp.empty:
+                st.plotly_chart(px.line(p_esp, x='fecha', y='cantidad', title=f"Producción {esp_nombre}"))
+
+# --- 4. SECCIÓN: CRECIMIENTO (METAS POR RAZA) ---
 elif menu == "🍗 CRECIMIENTO":
-    st.title("📈 Seguimiento de Madurez")
+    st.title("📈 Madurez y Reposición")
     df_l = cargar('lotes')
     if not df_l.empty:
         for _, row in df_l[df_l['estado']=='Activo'].iterrows():
             f_ent = datetime.strptime(row['fecha'], '%d/%m/%Y')
             edad_t = (datetime.now() - f_ent).days + int(row['edad_inicial'])
-            
-            if row['especie'] == 'Codornices': meta = 45
-            elif row['especie'] == 'Pollos': meta = 60 if "Blanco" in (row['tipo_engorde'] or "") else 110
-            else: meta = 145 # Gallinas
-            
-            prog = min(1.0, edad_t/meta)
-            with st.expander(f"{row['especie']} {row['raza']} - {edad_t} días de vida", expanded=True):
-                st.write(f"Objetivo: {meta} días")
-                st.progress(prog)
-                if edad_t >= meta: st.success("🎯 ¡OBJETIVO ALCANZADO!")
-
-# --- 5. SECCIÓN: PUESTA (ALERTA DE MADUREZ) ---
-elif menu == "🥚 PUESTA":
-    st.title("🥚 Diario de Puesta")
-    df_l = cargar('lotes')
-    
-    # Alerta visual si superan 130 días
-    if not df_l.empty:
-        for _, lote in df_l[(df_l['especie'] == 'Gallinas') & (df_l['estado'] == 'Activo')].iterrows():
-            f_ent = datetime.strptime(lote['fecha'], '%d/%m/%Y')
-            edad_actual = (datetime.now() - f_ent).days + int(lote['edad_inicial'])
-            if edad_actual >= 130:
-                st.error(f"🔥 **ALERTA MADUREZ:** Las {lote['raza']} tienen {edad_actual} días. ¡Pon el huevo ficticio!")
-
-    with st.form("f_puesta", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        f = col1.date_input("Fecha")
-        esp = col2.selectbox("Especie", ["Gallinas", "Codornices"])
-        rz = st.selectbox("Raza/Color", ["Roja", "Blanca", "Chocolate", "Azules", "Codorniz"])
-        can = st.number_input("Cantidad de Huevos", min_value=1)
-        if st.form_submit_button("✅ ANOTAR"):
-            c.execute("INSERT INTO produccion (fecha, raza, cantidad, especie) VALUES (?,?,?,?)", 
-                      (f.strftime('%d/%m/%Y'), rz, can, esp))
-            conn.commit(); st.rerun()
-    
-    df_p = cargar('produccion')
-    if not df_p.empty:
-        cmap = {"Chocolate": "#5D4037", "Roja": "#C62828", "Blanca": "#F5F5F5", "Azules": "#81D4FA", "Codorniz": "#BDBDBD"}
-        st.plotly_chart(px.bar(df_p, x='fecha', y='cantidad', color='raza', color_discrete_map=cmap))
-
-# --- 6. SECCIÓN: GASTOS ---
-elif menu == "💸 GASTOS":
-    st.title("💸 Registro de Gastos")
-    df_l = cargar('lotes')
-    opciones_rz = ["General"] + (df_l['raza'].unique().tolist() if not df_l.empty else [])
-    
-    with st.form("f_gasto", clear_on_submit=True):
-        f = st.date_input("Fecha")
-        cat = st.selectbox("Categoría", ["Pienso Pollos", "Pienso Gallinas", "Pienso Codornices", "Infraestructura", "Animales", "Salud"])
-        rz = st.selectbox("Asignar a Lote/Raza:", opciones_rz)
-        con = st.text_input("Concepto (Ej: Saco 25kg)")
-        imp = st.number_input("Importe (€)", min_value=0.0)
-        if st.form_submit_button("✅ GUARDAR GASTO"):
-            c.execute("INSERT INTO gastos (fecha, concepto, importe, categoria, raza) VALUES (?,?,?,?,?)", 
-                      (f.strftime('%d/%m/%Y'), con, imp, cat, rz))
-            conn.commit(); st.rerun()
-    st.dataframe(cargar('gastos'))
-
-# --- 7. SECCIÓN: VENTAS ---
-elif menu == "💰 VENTAS":
-    st.title("💰 Registro de Ventas")
-    with st.form("f_venta", clear_on_submit=True):
-        f = st.date_input("Fecha")
-        esp = st.selectbox("De qué Especie?", ["Pollos", "Gallinas", "Codornices"])
-        pro = st.selectbox("Producto", ["Huevos", "Animal Vivo", "Canal/Carne"])
-        can = st.number_input("Cantidad", min_value=1)
-        tot = st.number_input("Total Cobrado (€)")
-        if st.form_submit_button("✅ REGISTRAR VENTA"):
-            c.execute("INSERT INTO ventas (fecha, producto, cantidad, total, raza, especie) VALUES (?,?,?,?,?,?)", 
-                      (f.strftime('%d/%m/%Y'), pro, can, tot, "General", esp))
-            conn.commit(); st.rerun()
-    st.dataframe(cargar('ventas'))
-
-# --- 8. SECCIÓN: ALTA ANIMALES ---
-elif menu == "🐣 ALTA ANIMALES":
-    st.title("🐣 Entrada de Nuevos Lotes")
-    with st.form("f_alta"):
-        f = st.date_input("Fecha adquisición")
-        esp = st.selectbox("Especie", ["Pollos", "Gallinas", "Codornices"])
-        rz_sel = st.selectbox("Raza", ["Blanca", "Roja", "Chocolate", "Campero", "Codorniz Japónica", "OTRA"])
-        rz_nueva = st.text_input("Si elegiste 'OTRA', escribe el nombre:")
-        raza_f = rz_nueva if rz_sel == "OTRA" else rz_sel
-        tipo = st.selectbox("Tipo de Engorde", ["N/A", "Blanco", "Campero", "Puesta"])
-        e_ini = st.number_input("Edad al comprar (en días)", value=15)
-        can = st.number_input("Cantidad", min_value=1)
-        pre = st.number_input("Precio por unidad (€)")
-        if st.form_submit_button("✅ DAR DE ALTA"):
-            f_s = f.strftime('%d/%m/%Y')
-            c.execute("INSERT INTO lotes (fecha, especie, raza, tipo_engorde, edad_inicial, cantidad, precio_ud, estado) VALUES (?,?,?,?,?,?,?,?)", 
-                      (f_s, esp, raza_f, tipo, e_ini, can, pre, 'Activo'))
-            # Registro automático en gastos
-            c.execute("INSERT INTO gastos (fecha, concepto, importe, categoria, raza) VALUES (?,?,?,?,?)",
-                      (f_s, f"Compra {can} {raza_f}", can*pre, "Animales", raza_f))
-            conn.commit(); st.rerun()
-    st.dataframe(cargar('lotes'))
-
-# --- 9. SECCIÓN: ADMIN ---
-elif menu == "🛠️ ADMIN":
-    st.title("🛠️ Administración de Datos")
-    
-    if st.button("📥 EXPORTAR TODO A EXCEL"):
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            cargar('lotes').to_excel(writer, sheet_name='Animales', index=False)
-            cargar('gastos').to_excel(writer, sheet_name='Gastos', index=False)
-            cargar('ventas').to_excel(writer, sheet_name='Ventas', index=False)
-            cargar('produccion').to_excel(writer, sheet_name='Huevos', index=False)
-        st.download_button(label="⬇️ Descargar archivo .xlsx", data=output.getvalue(), file_name="corral_backup.xlsx")
-    
-    st.divider()
-    tab = st.selectbox("Tabla a gestionar", ["lotes", "gastos", "ventas", "produccion"])
-    df_ad = cargar(tab)
-    if not df_ad.empty:
-        st.dataframe(df_ad)
-        id_b = st.number_input("ID a eliminar", min_value=0)
-        if st.button("🗑️ BORRAR REGISTRO"):
-            c.execute(f"DELETE FROM {tab} WHERE id=?", (id_b,))
-            conn.commit(); st.rerun()
-# --- (Busca la sección de CRECIMIENTO y añade esta nueva lógica de REPOSICIÓN) ---
-
-elif menu == "🍗 CRECIMIENTO":
-    st.title("📈 Seguimiento y Planificación de Reposición")
-    df_l = cargar('lotes')
-    
-    if not df_l.empty:
-        for _, row in df_l[df_l['estado']=='Activo'].iterrows():
-            f_ent = datetime.strptime(row['fecha'], '%d/%m/%Y')
-            edad_t = (datetime.now() - f_ent).days + int(row['edad_inicial'])
-            
-            # --- OBJETIVOS DINÁMICOS POR RAZA ---
             raza = row['raza'].upper()
+            
+            # Lógica de metas
             if row['especie'] == 'Codornices': meta = 45
-            elif row['especie'] == 'Pollos':
-                meta = 60 if "BLANCO" in raza else 110
+            elif row['especie'] == 'Pollos': meta = 60 if "BLANCO" in raza else 110
             else: # Gallinas
                 if "ROJA" in raza: meta = 140
                 elif "CHOCOLATE" in raza: meta = 180
                 else: meta = 160
             
             prog = min(1.0, edad_t/meta)
-            
             with st.expander(f"{row['especie']} {row['raza']} - {edad_t} días", expanded=True):
                 st.progress(prog)
-                
-                # --- LÓGICA DE REPOSICIÓN (NAVIDAD / CICLOS) ---
-                if row['especie'] == 'Pollos' and prog > 0.7:
-                    st.warning(f"⚠️ **AVISO DE REPOSICIÓN:** Este lote está al {int(prog*100)}%. Deberías comprar el siguiente lote en 10 días para no quedarte sin carne.")
-                
-                if row['especie'] == 'Gallinas' and edad_t > 500: # Gallinas viejas
-                    st.info("💡 Estas gallinas se acercan a los 2 años. Planifica la compra de pollas nuevas en primavera para mantener la puesta en Navidad.")
+                if prog > 0.8: st.warning("⚠️ Planifica reposición pronto.")
+                if edad_t >= meta: st.success("🎯 Madurez alcanzada.")
 
-# --- NUEVA SECCIÓN: PLAN NAVIDAD ---
+# --- 5. SECCIÓN: PUESTA (CON ALERTA) ---
+elif menu == "🥚 PUESTA":
+    st.title("🥚 Diario de Puesta")
+    df_l = cargar('lotes')
+    if not df_l.empty:
+        for _, lote in df_l[(df_l['especie'] == 'Gallinas') & (df_l['estado'] == 'Activo')].iterrows():
+            f_ent = datetime.strptime(lote['fecha'], '%d/%m/%Y')
+            edad = (datetime.now() - f_ent).days + int(lote['edad_inicial'])
+            if edad >= 130: st.error(f"🔥 ¡ALERTA! {lote['raza']} con {edad} días. ¡Revisar nidos!")
+
+    with st.form("f_puesta", clear_on_submit=True):
+        f = st.date_input("Fecha"); esp = st.selectbox("Especie", ["Gallinas", "Codornices"])
+        rz = st.selectbox("Raza", ["Roja", "Blanca", "Chocolate", "Azules", "Codorniz"])
+        can = st.number_input("Cantidad Huevos", min_value=1)
+        if st.form_submit_button("✅ GUARDAR"):
+            c.execute("INSERT INTO produccion (fecha, raza, cantidad, especie) VALUES (?,?,?,?)", (f.strftime('%d/%m/%Y'), rz, can, esp))
+            conn.commit(); st.rerun()
+
+# --- 6. GASTOS, VENTAS, ALTA Y NAVIDAD (ESTRUCTURA FINAL) ---
+elif menu == "💸 GASTOS":
+    st.title("💸 Gastos")
+    with st.form("fg"):
+        f = st.date_input("Fecha"); cat = st.selectbox("Categoría", ["Pienso Gallinas", "Pienso Pollos", "Pienso Codornices", "Infraestructura", "Animales"])
+        rz = st.text_input("Asignar a Raza (Ej: Roja)"); con = st.text_input("Concepto"); imp = st.number_input("Importe (€)")
+        if st.form_submit_button("✅ ANOTAR"):
+            c.execute("INSERT INTO gastos (fecha, concepto, importe, categoria, raza) VALUES (?,?,?,?,?)", (f.strftime('%d/%m/%Y'), con, imp, cat, rz))
+            conn.commit(); st.rerun()
+    st.dataframe(cargar('gastos'))
+
+elif menu == "💰 VENTAS":
+    st.title("💰 Ventas")
+    with st.form("fv"):
+        f = st.date_input("Fecha"); esp = st.selectbox("Especie", ["Gallinas", "Pollos", "Codornices"])
+        pro = st.selectbox("Producto", ["Huevos", "Animal Vivo", "Carne"]); can = st.number_input("Cant."); tot = st.number_input("Total (€)")
+        if st.form_submit_button("✅ VENDER"):
+            c.execute("INSERT INTO ventas (fecha, producto, cantidad, total, raza, especie) VALUES (?,?,?,?,?,?)", (f.strftime('%d/%m/%Y'), pro, can, tot, "General", esp))
+            conn.commit(); st.rerun()
+
+elif menu == "🐣 ALTA ANIMALES":
+    st.title("🐣 Alta")
+    with st.form("fa"):
+        f = st.date_input("Fecha"); esp = st.selectbox("Especie", ["Pollos", "Gallinas", "Codornices"])
+        rz = st.text_input("Raza (Escribe ROJA, BLANCA o CHOCOLATE para objetivos)"); e_ini = st.number_input("Edad al comprar (días)", value=15)
+        can = st.number_input("Cantidad"); pre = st.number_input("Precio/ud")
+        if st.form_submit_button("✅ REGISTRAR"):
+            c.execute("INSERT INTO lotes (fecha, especie, raza, tipo_engorde, edad_inicial, cantidad, precio_ud, estado) VALUES (?,?,?,?,?,?,?,?)", (f.strftime('%d/%m/%Y'), esp, rz, "N/A", e_ini, can, pre, 'Activo'))
+            c.execute("INSERT INTO gastos (fecha, concepto, importe, categoria, raza) VALUES (?,?,?,?,?)", (f.strftime('%d/%m/%Y'), f"Compra {rz}", can*pre, "Animales", rz))
+            conn.commit(); st.rerun()
+
 elif menu == "🎄 PLAN NAVIDAD":
-    st.title("❄️ Preparación para Invierno/Navidad")
-    st.info("Las gallinas bajan la puesta en diciembre. Aquí tienes tu hoja de ruta:")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("💡 Iluminación")
-        st.write("Para tener huevos en Navidad, necesitas 14h de luz. Programa un reloj para que se encienda a las 6:00 AM.")
-    with col2:
-        st.subheader("🍗 Engorde Navideño")
-        st.write("Si quieres pollos para la cena de Navidad, debes darlos de alta a finales de Septiembre (si son camperos).")
+    st.title("🎄 Plan de Invierno")
+    st.info("Recordatorio: 14h de luz diaria para mantener la puesta en diciembre.")
+    if st.button("⏰ Activar Plan de Luz"): st.success("Plan activado en el calendario.")
 
-    # Botón para añadir recordatorio automático
-    if st.button("⏰ Programar aviso: Compra pollos para Navidad"):
-        st.success("Recordatorio fijado para el 20 de Septiembre")
+elif menu == "🛠️ ADMIN":
+    st.title("🛠️ Admin")
+    if st.button("📥 EXPORTAR EXCEL"):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            cargar('lotes').to_excel(writer, sheet_name='Lotes')
+            cargar('gastos').to_excel(writer, sheet_name='Gastos')
+        st.download_button("Descargar", output.getvalue(), "corral.xlsx")
+    tab = st.selectbox("Tabla", ["lotes", "gastos", "ventas", "produccion"])
+    df = cargar(tab)
+    if not df.empty:
+        st.dataframe(df)
+        id_b = st.number_input("ID a borrar", min_value=0)
+        if st.button("🗑️ Borrar"): c.execute(f"DELETE FROM {tab} WHERE id=?", (id_b,)); conn.commit(); st.rerun()

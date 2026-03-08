@@ -3,202 +3,165 @@ import pandas as pd
 import sqlite3
 import plotly.express as px
 import io
-import os
 from datetime import datetime, timedelta
 
-# ====================== 1. CONFIGURACIÓN DE PÁGINA ======================
-
-st.set_page_config(page_title="CORRAL MAESTRO PRO", layout="wide", page_icon="🚜")
-
-# ====================== 2. BASE DE DATOS ======================
-
-DB_PATH = './data/corral_maestro_2026.db'
-if not os.path.exists('data'):
-os.makedirs('data')
-
-def get_conn():
-return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-def inicializar_db():
-conn = get_conn()
+# --- 1. CONFIGURACIÓN Y BASE DE DATOS ---
+st.set_page_config(page_title="CORRAL MAESTRO PRO", layout="wide")
+conn = sqlite3.connect('corral_final_consolidado.db', check_same_thread=False)
 c = conn.cursor()
-# Tablas principales
-c.execute('''CREATE TABLE IF NOT EXISTS lotes (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, tipo TEXT, raza TEXT, cantidad INTEGER, estado TEXT, usuario TEXT, edad_inicial INTEGER DEFAULT 0)''')
-c.execute('''CREATE TABLE IF NOT EXISTS produccion (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote_id INTEGER, cantidad INTEGER, usuario TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS finanzas (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, tipo TEXT, categoria TEXT, concepto TEXT, importe REAL, usuario TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS bajas (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote_id INTEGER, cantidad INTEGER, motivo TEXT, usuario TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE, clave TEXT, rango TEXT)''')
-# Usuario admin por defecto
-c.execute("INSERT OR IGNORE INTO usuarios (nombre, clave, rango) VALUES (?,?,?)", ('admin', '1234', 'Admin'))
-conn.commit()
-conn.close()
+
+# Inicialización segura de la DB
+def inicializar_db():
+    c.execute('''CREATE TABLE IF NOT EXISTS lotes (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, tipo_engorde TEXT, cantidad INTEGER, precio_ud REAL, estado TEXT, edad_inicial INTEGER DEFAULT 0)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS gastos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, concepto TEXT, importe REAL, kilos REAL DEFAULT 0, categoria TEXT, raza TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS ventas (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, producto TEXT, cantidad INTEGER, total REAL, raza TEXT, especie TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS produccion (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, raza TEXT, cantidad REAL, especie TEXT)''')
+    conn.commit()
 
 inicializar_db()
 
-# ====================== 3. CONTROL DE ACCESO ======================
+# Función para cargar tablas
+def cargar(tabla):
+    try:
+        return pd.read_sql(f"SELECT * FROM {tabla} ORDER BY id DESC", conn)
+    except:
+        return pd.DataFrame()
 
-if 'auth' not in st.session_state:
-st.session_state.auth = False
-st.session_state.user = ''
-st.session_state.rango = ''
+# --- 2. MENÚ LATERAL ---
+st.sidebar.title("🐓 GESTIÓN INTEGRAL")
+menu = st.sidebar.radio("IR A:", ["📊 RENTABILIDAD", "📈 CRECIMIENTO", "🥚 PUESTA", "💸 GASTOS (PIENSO)", "💰 VENTAS", "🐣 ALTA ANIMALES", "🎄 PLAN NAVIDAD", "🛠️ ADMIN"])
 
-if not st.session_state.auth:
-st.title("🔐 Acceso al Sistema")
-with st.container():
-u = st.text_input("Usuario")
-p = st.text_input("Clave", type="password")
-if st.button("ENTRAR"):
-conn = get_conn()
-c = conn.cursor()
-c.execute("SELECT nombre, rango FROM usuarios WHERE nombre=? AND clave=?", (u, p))
-res = c.fetchone()
-conn.close()
-if res:
-st.session_state.auth = True
-st.session_state.user = res[0]
-st.session_state.rango = res[1]
-st.rerun()
-else:
-st.error("Usuario o contraseña incorrectos")
-st.stop()
+# --- 3. RENTABILIDAD ---
+if menu == "📊 RENTABILIDAD":
+    st.title("📊 Análisis de Rentabilidad")
+    df_g = cargar('gastos'); df_v = cargar('ventas'); df_p = cargar('produccion')
+    tabs = st.tabs(["🌍 General", "🐔 Gallinas", "🐥 Pollos", "🐦 Codornices"])
 
-if st.sidebar.button("Cerrar Sesión"):
-st.session_state.auth = False
-st.rerun()
+    with tabs[0]:
+        g_t = df_g['importe'].sum(); v_t = df_v['total'].sum()
+        st.metric("Beneficio Global", f"{v_t - g_t:.2f}€", delta=f"{v_t - g_t:.2f}€")
+        if not df_g.empty:
+            st.plotly_chart(px.pie(df_g, values='importe', names='categoria'))
 
-# ====================== 4. FUNCIONES AUXILIARES ======================
+    for i, esp in enumerate(["Gallinas", "Pollos", "Codornices"], 1):
+        with tabs[i]:
+            df_g['categoria'] = df_g['categoria'].str.lower()
+            df_v['especie'] = df_v['especie'].str.lower()
+            esp_lower = esp.lower()
+            g_e = df_g[df_g['categoria'].str.contains(esp_lower, na=False)]['importe'].sum()
+            v_e = df_v[df_v['especie'] == esp_lower]['total'].sum()
+            st.subheader(f"Balance {esp}: {v_e - g_e:.2f}€")
+            p_data = df_p[df_p['especie'].str.lower() == esp_lower]
+            if p_data.empty:
+                st.info("No hay producción registrada para esta especie aún")
+            else:
+                p_data['fecha'] = p_data['fecha'].astype(str)
+                st.plotly_chart(px.line(p_data, x='fecha', y='cantidad'))
 
-def leer(tabla):
-conn = get_conn()
-try:
-return pd.read_sql(f"SELECT * FROM {tabla} ORDER BY id DESC", conn)
-except:
-return pd.DataFrame()
-finally:
-conn.close()
+# --- 4. CRECIMIENTO ---
+elif menu == "📈 CRECIMIENTO":
+    st.title("📈 Control de Madurez")
+    df_l = cargar('lotes')
+    if not df_l.empty:
+        for _, row in df_l[df_l['estado']=='Activo'].iterrows():
+            f_ent = datetime.strptime(row['fecha'], '%d/%m/%Y')
+            edad_t = (datetime.now() - f_ent).days + int(row['edad_inicial'])
+            rz = row['raza'].upper()
+            if row['especie'] == 'Codornices': meta = 45
+            elif row['especie'] == 'Pollos': meta = 60 if "BLANCO" in rz else 95 if "CAMPERO" in rz else 110
+            else: meta = 140 if "ROJA" in rz else 185 if "CHOCOLATE" in rz else 165
+            prog = min(1.0, edad_t/meta)
+            with st.expander(f"🔹 {row['especie']} {row['raza']} - {edad_t} días", expanded=True):
+                st.progress(prog)
+                if prog >= 0.8 and row['especie'] != 'Gallinas': st.warning("⚠️ REPOSICIÓN PRÓXIMA")
+                st.write(f"Meta: {meta} días | Progreso: {int(prog*100)}%")
 
-# ====================== 5. INTERFAZ PRINCIPAL ======================
+# --- 5. GASTOS ---
+elif menu == "💸 GASTOS (PIENSO)":
+    st.title("💸 Gastos y Suministros")
+    with st.form("fg"):
+        f = st.date_input("Fecha")
+        cat = st.selectbox("Categoría", ["Pienso Gallinas", "Pienso Pollos", "Pienso Codornices", "Salud", "Infraestructura"])
+        con = st.text_input("Concepto")
+        imp = st.number_input("Importe (€)")
+        kgs = st.number_input("Kilos", 0.0)
+        if st.form_submit_button("✅"):
+            c.execute("INSERT INTO gastos (fecha, concepto, importe, kilos, categoria, raza) VALUES (?,?,?,?,?,?)", (f.strftime('%d/%m/%Y'), con, imp, kgs, cat, "General"))
+            conn.commit()
+            st.success("✅ Gasto guardado correctamente")
+            st.rerun()
+    st.dataframe(cargar('gastos'))
 
-st.sidebar.title(f"👤 {st.session_state.user}")
-st.sidebar.write(f"Rango: `{st.session_state.rango}`")
+# --- 6. PLAN NAVIDAD ---
+elif menu == "🎄 PLAN NAVIDAD":
+    st.title("🎄 Plan Navidad 2026")
+    tipo = st.selectbox("Tipo de Pollo", ["Pollo Campero", "Pollo Blanco"])
+    dias = 95 if "Campero" in tipo else 60
+    f_compra = datetime(2026, 12, 24) - timedelta(days=dias)
+    st.success(f"📅 Comprar pollitos el: **{f_compra.strftime('%d/%m/%Y')}**")
 
-opcion = st.sidebar.radio("SELECCIONE TAREA:", [
-"🏠 Vista General",
-"🐣 Entrada de Animales",
-"🥚 Registro de Puesta",
-"☠️ Reportar Baja",
-"💰 Gastos y Ventas",
-"📊 Estadísticas",
-"🛠️ Administración"
-])
+# --- 7. ADMIN ---
+elif menu == "🛠️ ADMIN":
+    st.title("🛠️ Administración")
+    tab = st.selectbox("Seleccionar Tabla", ["lotes", "gastos", "ventas", "produccion"])
+    df = cargar(tab)
+    if not df.empty:
+        st.dataframe(df)
+        id_b = st.number_input("ID a borrar", 0)
+        if st.button("🗑️ BORRAR REGISTRO"):
+            c.execute(f"DELETE FROM {tab} WHERE id=?", (id_b,))
+            conn.commit()
+            st.success("✅ Registro borrado correctamente")
+            st.rerun()
 
-# ---------------- 🏠 VISTA GENERAL ----------------
-
-if opcion == "🏠 Vista General":
-st.title("🏠 Estado Actual del Corral")
-df_l = leer('lotes')
-df_b = leer('bajas')
-
-```
-if df_l.empty:
-    st.info("El corral está vacío. Registra tu primer lote en 'Entrada de Animales'.")
-else:
-    actuales = df_l['cantidad'].sum() - (df_b['cantidad'].sum() if not df_b.empty else 0)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Aves Totales", f"{int(actuales)} uds")
-    c2.metric("Lotes Activos", len(df_l))
-    c3.metric("Bajas", int(df_b['cantidad'].sum()) if not df_b.empty else 0, delta_color="inverse")
+    # BOTÓN DE BACKUP COMPLETO
     st.divider()
-    st.subheader("📋 Resumen de Lotes")
-    st.dataframe(df_l[['id', 'tipo', 'raza', 'cantidad', 'fecha']], use_container_width=True)
-```
+    st.subheader("💾 Backup Completo de la Base de Datos")
+    if st.button("📥 Descargar Backup Completo"):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            for tabla in ['lotes','gastos','ventas','produccion']:
+                df_b = cargar(tabla)
+                df_b.to_excel(writer, index=False, sheet_name=tabla)
+        st.download_button(
+            label="📥 Descargar Backup Excel Completo",
+            data=output.getvalue(),
+            file_name=f"backup_corral_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-# ---------------- 🐣 ENTRADA DE ANIMALES ----------------
+# --- 8. PUESTA ---
+elif menu == "🥚 PUESTA":
+    st.title("🥚 Puesta")
+    df_l = cargar('lotes')
+    razas_disponibles = df_l['raza'].unique().tolist() if not df_l.empty else ["Roja"]
+    f = st.date_input("Fecha")
+    rz = st.selectbox("Raza", razas_disponibles)
+    can = st.number_input("Cantidad", 1)
+    if st.button("Anotar"):
+        especie = "Gallinas" if rz != "Codorniz" else "Codornices"
+        c.execute("INSERT INTO produccion (fecha, raza, cantidad, especie) VALUES (?,?,?,?)", (f.strftime('%d/%m/%Y'), rz, can, especie))
+        conn.commit()
+        st.success("✅ Producción guardada correctamente")
+        st.rerun()
 
-elif opcion == "🐣 Entrada de Animales":
-st.title("🐣 Registro de Nuevo Lote")
-with st.form("form_alta"):
-tipo = st.selectbox("Animal", ["Gallina Ponedora", "Pollo Engorde", "Codorniz", "Pavo", "Pato"])
-raza = st.text_input("Raza (Ej: Campero, Roja...)", value="Roja")
-cant = st.number_input("Cantidad de aves", min_value=1, value=10)
-e_ini = st.number_input("Edad inicial (días)", min_value=0, value=0)
-fecha = st.date_input("Fecha de entrada")
+# --- 9. VENTAS ---
+elif menu == "💰 VENTAS":
+    st.title("💰 Ventas")
+    st.dataframe(cargar('ventas'))
 
-```
-    if st.form_submit_button("✅ CONFIRMAR ENTRADA"):
-        conn = get_conn(); c = conn.cursor()
-        c.execute("INSERT INTO lotes (fecha, tipo, raza, cantidad, estado, usuario, edad_inicial) VALUES (?,?,?,?,?,?,?)",
-                  (fecha.strftime('%d/%m/%Y'), tipo, raza, cant, 'Activo', st.session_state.user, e_ini))
-        conn.commit(); conn.close()
-        st.success("¡Lote registrado con éxito!")
-        st.balloons()
-```
-
-# ---------------- 🥚 REGISTRO DE PUESTA ----------------
-
-elif opcion == "🥚 Registro de Puesta":
-st.title("🥚 Producción Diaria")
-df_l = leer('lotes')
-if df_l.empty:
-st.warning("No hay animales registrados.")
-else:
-with st.form("form_puesta"):
-l_id = st.selectbox("ID del Lote", df_l['id'].tolist())
-cant_h = st.number_input("Huevos recogidos", min_value=1)
-# Primera puesta manual
-f_p = st.date_input("Fecha de puesta", value=datetime.now())
-if st.form_submit_button("💾 GUARDAR REGISTRO"):
-conn = get_conn(); c = conn.cursor()
-c.execute("INSERT INTO produccion (fecha, lote_id, cantidad, usuario) VALUES (?,?,?,?)",
-(f_p.strftime('%d/%m/%Y'), l_id, cant_h, st.session_state.user))
-conn.commit(); conn.close()
-st.success("Producción anotada.")
-
-# ---------------- ☠️ REPORTAR BAJA ----------------
-
-elif opcion == "☠️ Reportar Baja":
-st.title("☠️ Registro de Bajas")
-df_l = leer('lotes')
-if df_l.empty:
-st.warning("No hay animales.")
-else:
-with st.form("form_bajas"):
-l_id = st.selectbox("Lote", df_l['id'].tolist())
-c_baja = st.number_input("Cantidad de bajas", min_value=1)
-motivo = st.selectbox("Motivo", ["Enfermedad", "Depredador", "Accidente", "Desconocido"])
-if st.form_submit_button("❌ CONFIRMAR BAJA"):
-conn = get_conn(); c = conn.cursor()
-c.execute("INSERT INTO bajas (fecha, lote_id, cantidad, motivo, usuario) VALUES (?,?,?,?,?)",
-(datetime.now().strftime('%d/%m/%Y'), l_id, c_baja, motivo, st.session_state.user))
-conn.commit(); conn.close()
-st.error(f"Registradas {c_baja} bajas.")
-
-# ---------------- 💰 GASTOS Y VENTAS ----------------
-
-elif opcion == "💰 Gastos y Ventas":
-st.title("💰 Movimientos de Caja")
-with st.form("form_finanzas"):
-tipo_m = st.selectbox("Operación", ["Gasto", "Venta"])
-cat = st.selectbox("Categoría", ["Pienso", "Salud", "Suministros", "Venta Huevos", "Venta Carne", "Otros"])
-con = st.text_input("Concepto")
-imp = st.number_input("Importe (€)", min_value=0.0)
-if st.form_submit_button("💰 REGISTRAR"):
-conn = get_conn(); c = conn.cursor()
-c.execute("INSERT INTO finanzas (fecha, tipo, categoria, concepto, importe, usuario) VALUES (?,?,?,?,?,?)",
-(datetime.now().strftime('%d/%m/%Y'), tipo_m, cat, con, imp, st.session_state.user))
-conn.commit(); conn.close()
-st.success("Operación guardada.")
-
-# ---------------- 🛠️ ADMINISTRACIÓN ----------------
-
-elif opcion == "🛠️ Administración":
-st.title("🛠️ Panel de Control")
-if st.session_state.rango != 'Admin':
-st.error("No tienes permisos.")
-else:
-if st.button("📥 Descargar Copia de Seguridad (Excel)"):
-output = io.BytesIO()
-with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-for t in ['lotes','produccion','finanzas','bajas','usuarios']:
-leer(t).to_excel(writer, sheet_name=t, index=False)
-st.download_button("Descargar Archivo", output.getvalue(), "corral_backup.xlsx")
+# --- 10. ALTA ANIMALES ---
+elif menu == "🐣 ALTA ANIMALES":
+    st.title("🐣 Alta")
+    with st.form("fa"):
+        f = st.date_input("Fecha")
+        esp = st.selectbox("Especie", ["Gallinas", "Pollos", "Codornices"])
+        rz = st.selectbox("Raza", ["Roja", "Blanca", "Chocolate", "Pollo Blanco (Engorde)", "Pollo Campero", "Codorniz Japónica", "OTRA"])
+        can = st.number_input("Cant.")
+        pre = st.number_input("Precio/ud")
+        e_ini = st.number_input("Edad inicial", 15)
+        if st.form_submit_button("✅"):
+            c.execute("INSERT INTO lotes (fecha, especie, raza, tipo_engorde, edad_inicial, cantidad, precio_ud, estado) VALUES (?,?,?,?,?,?,?,?)", (f.strftime('%d/%m/%Y'), esp, rz, "N/A", e_ini, can, pre, 'Activo'))
+            conn.commit()
+            st.success("✅ Lote guardado correctamente")
+            st.rerun()

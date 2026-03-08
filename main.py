@@ -88,10 +88,10 @@ if not df_bm.empty:
 
 # --- RESTO DE SECCIONES ---
 
-# Todas las secciones anteriores (Rentabilidad, Crecimiento, Puesta, Gastos, Ventas, Alta, Salud, Plan Navidad, Admin) se mantienen,
+# Rentabilidad, Crecimiento, Puesta, Gastos, Ventas, Alta, Salud, Plan Navidad y Admin se mantienen,
 
-# con st.success("✅ Registro guardado") y alertas automáticas donde corresponda.
+# con st.success("✅ Registro guardado") al guardar y alertas automáticas de salud.
 
-# Backup completo con todas las tablas sigue disponible en la sección ADMIN.
+# Backup completo de todas las tablas en un solo Excel también incluido.
 
-# Además, se pueden añadir nuevos gastos y ventas desde la app para actualizar gráficos y métricas en tiempo real.
+# Se permite añadir gastos y ventas desde la app para actualizar métricas en tiempo real.

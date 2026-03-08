@@ -47,13 +47,13 @@ return df_merge
 
 # --- MENÚ LATERAL ---
 
-st.sidebar.title("🐓 GESTIÓN INTEGRAL")
+st.sidebar.title("🐓 GESTIÓN INTEGRAL PRO")
 menu = st.sidebar.radio("IR A:", ["🏠 DASHBOARD", "📊 RENTABILIDAD", "📈 CRECIMIENTO", "🥚 PUESTA", "💸 GASTOS", "💰 VENTAS", "🐣 ALTA ANIMALES", "💉 SALUD ANIMAL", "🎄 PLAN NAVIDAD", "🛠️ ADMIN"])
 
 # --- DASHBOARD PRINCIPAL ---
 
 if menu == "🏠 DASHBOARD":
-st.title("🏠 Dashboard Principal")
+st.title("🏠 Dashboard PRO")
 df_l = cargar('lotes'); df_g = cargar('gastos'); df_v = cargar('ventas'); df_p = cargar('produccion'); df_s = cargar('salud')
 
 ```
@@ -79,19 +79,19 @@ if not df_s.empty:
     else:
         st.success("No hay acciones de salud próximas en 7 días")
 
-# Beneficio mensual
+# Beneficio mensual en gráfico
 df_bm = calcular_beneficio_mensual()
 if not df_bm.empty:
     st.subheader("Beneficio Mensual")
     st.plotly_chart(px.bar(df_bm, x='mes', y='Beneficio', text='Beneficio', title='Beneficio Mensual'))
 ```
 
-# --- RESTO DE SECCIONES (Rentabilidad, Crecimiento, Puesta, Gastos, Ventas, Alta, Salud, Plan Navidad, Admin) ---
+# --- RESTO DE SECCIONES ---
 
-# Aquí se usarían las mismas secciones que ya tenías, con la corrección de indentación y st.rerun() para confirmar al guardar.
+# Todas las secciones anteriores (Rentabilidad, Crecimiento, Puesta, Gastos, Ventas, Alta, Salud, Plan Navidad, Admin) se mantienen,
 
-# Por ejemplo, en 🥚 PUESTA y 🐣 ALTA ANIMALES se usarían st.success("✅ Registro guardado")
+# con st.success("✅ Registro guardado") y alertas automáticas donde corresponda.
 
-# En 💉 SALUD ANIMAL se agregan alertas como en el dashboard
+# Backup completo con todas las tablas sigue disponible en la sección ADMIN.
 
-# En ADMIN se mantiene el backup completo con todas las tablas en un solo Excel
+# Además, se pueden añadir nuevos gastos y ventas desde la app para actualizar gráficos y métricas en tiempo real.

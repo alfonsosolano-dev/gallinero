@@ -2,23 +2,24 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-# Título de prueba para ver si carga
-st.title("🚜 Prueba de Conexión")
+st.title("🚜 Prueba de Conexión Final")
 
-# Verificamos si los secrets están cargados
-if "connections" not in st.secrets:
-    st.error("❌ No se encuentran los 'Secrets'. Revisa la configuración en Streamlit Cloud.")
-    st.stop()
-
-# Recuperamos la URL del Secret (Asegúrate de haber puesto el puerto 6543 como hablamos antes)
+# Recuperamos la URL limpia de los secrets
 db_url = st.secrets["connections"]["postgresql"]["url"]
 
-# Creamos el motor de base de datos
-engine = create_engine(db_url)
+# Creamos el motor con una configuración más sencilla
+engine = create_engine(db_url, connect_args={"connect_timeout": 10})
 
 try:
     with engine.connect() as conn:
+        # Intentamos una consulta simple
         res = conn.execute(text("SELECT 1"))
-        st.success("✅ ¡CONECTADO A SUPABASE!")
+        st.success("✅ ¡CONEXIÓN ESTABLECIDA CON SUPABASE!")
+        
+        # Verificamos si podemos crear una tabla
+        conn.execute(text("CREATE TABLE IF NOT EXISTS test_conexion (id SERIAL PRIMARY KEY)"))
+        conn.commit()
+        st.info("Estructura de base de datos verificada correctamente.")
+        
 except Exception as e:
-    st.error(f"❌ Error de conexión: {e}")
+    st.error(f"❌ Error detallado: {e}")

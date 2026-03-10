@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="CORRAL MAESTRO CLOUD", layout="wide", page_icon="🐓")
 
 # ====================== 2. CONEXIÓN A SUPABASE ======================
-conn = st.connection("postgresql", type="sql")
+conn = st.connection("postgresql", type="sql", autocommit=True)
 
 def inicializar_tablas():
     with conn.session as s:
@@ -147,3 +147,4 @@ elif menu == "🛠️ ADMIN":
                     conn.query(f"SELECT * FROM {t}", ttl=0).to_excel(writer, index=False, sheet_name=t)
             st.download_button("Click para descargar", output.getvalue(), "corral_cloud.xlsx")
     else: st.error("Sin acceso.")
+

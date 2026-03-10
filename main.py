@@ -2,7 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import plotly.express as px
 
 # ====================== 1. CONFIGURACIÓN Y BASE DE DATOS ======================
@@ -15,6 +15,7 @@ def get_conn():
 def inicializar_db():
     conn = get_conn()
     c = conn.cursor()
+    # Tablas base
     c.execute("""CREATE TABLE IF NOT EXISTS lotes(
         id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, 
         cantidad INTEGER, edad_inicial INTEGER, precio_ud REAL, estado TEXT)""")
@@ -24,6 +25,13 @@ def inicializar_db():
     c.execute("CREATE TABLE IF NOT EXISTS salud(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, descripcion TEXT, proxima_fecha TEXT, estado TEXT)")
     c.execute("CREATE TABLE IF NOT EXISTS bajas(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, cantidad INTEGER, motivo TEXT)")
     c.execute("CREATE TABLE IF NOT EXISTS primera_puesta(id INTEGER PRIMARY KEY AUTOINCREMENT, lote_id INTEGER UNIQUE, fecha_puesta TEXT)")
+    
+    # ARREGLO AUTOMÁTICO DE COLUMNAS (Para evitar el OperationalError)
+    try:
+        c.execute("ALTER TABLE gastos ADD COLUMN kilos_pienso REAL DEFAULT 0")
+    except:
+        pass # La columna ya existe
+    
     conn.commit()
     conn.close()
 
@@ -35,148 +43,136 @@ def cargar(tabla):
 
 inicializar_db()
 
-# ====================== 2. LÓGICA DE INTELIGENCIA (CÁLCULOS) ======================
+# ====================== 2. CÁLCULOS INTELIGENTES ======================
 lotes = cargar("lotes"); prod = cargar("produccion"); gastos = cargar("gastos")
 ventas = cargar("ventas"); salud = cargar("salud"); bajas = cargar("bajas")
 
-# Cálculo de Aves Vivas
-t_altas = lotes["cantidad"].sum() if not lotes.empty else 0
-t_bajas = bajas["cantidad"].sum() if not bajas.empty else 0
-vivas = t_altas - t_bajas
-
-# Cálculo de Stock de Pienso Estimado
-t_kilos_comprados = gastos["kilos_pienso"].sum() if not gastos.empty else 0
-# Estimación consumo: Gallina (120g/día), Pollo (150g/día), Codorniz (30g/día)
-consumo_diario_est = 0
+# Stock de pienso estimado
+t_kg = gastos["kilos_pienso"].sum() if not gastos.empty else 0
+consumo_diario = 0
 if not lotes.empty:
     for _, r in lotes.iterrows():
-        b_lote = bajas[bajas['lote']==r['id']]['cantidad'].sum() if not bajas.empty else 0
-        actuales = r['cantidad'] - b_lote
-        if r['especie'] == "Gallinas": consumo_diario_est += actuales * 0.120
-        elif r['especie'] == "Pollos": consumo_diario_est += actuales * 0.150
-        else: consumo_diario_est += actuales * 0.030
-
-dias_pienso = (t_kilos_comprados / consumo_diario_est) if consumo_diario_est > 0 else 0
+        b_l = bajas[bajas['lote']==r['id']]['cantidad'].sum() if not bajas.empty else 0
+        vivas_lote = r['cantidad'] - b_l
+        factor = 0.120 if r['especie'] == "Gallinas" else 0.150 if r['especie'] == "Pollos" else 0.030
+        consumo_diario += vivas_lote * factor
+dias_pienso = (t_kg / consumo_diario) if consumo_diario > 0 else 0
 
 # ====================== 3. MENÚ LATERAL ======================
 menu = st.sidebar.selectbox("MENÚ PRINCIPAL", [
-    "🏠 Dashboard Elite", "🐣 Gestión de Lotes", "🥚 Producción", 
+    "🏠 Dashboard", "🐣 Alta de Lotes", "🥚 Producción", 
     "💸 Gastos e Inventario", "💰 Ventas y Clientes", "💉 Salud y Alertas", "💾 SEGURIDAD"
 ])
 
-# --- DASHBOARD ELITE ---
-if menu == "🏠 Dashboard Elite":
-    st.title("🏠 Panel de Control Inteligente")
-    
-    # Métricas Principales
+# --- DASHBOARD ---
+if menu == "🏠 Dashboard":
+    st.title("🏠 Panel de Control")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Aves Activas", int(vivas))
-    c2.metric("Stock Pienso (Días)", f"{dias_pienso:.1f} d", delta="- Consumo diario" if dias_pienso < 5 else None, delta_color="inverse")
+    c1.metric("Stock Pienso", f"{dias_pienso:.1f} días")
     
     t_v = ventas[ventas['tipo_venta']=='Venta Cliente']['cantidad'].sum() if not ventas.empty else 0
     t_g = gastos['cantidad'].sum() if not gastos.empty else 0
-    c3.metric("Balance Económico", f"{(t_v - t_g):.2f}€")
+    c2.metric("Balance", f"{(t_v - t_g):.2f}€")
     
     t_h = prod['huevos'].sum() if not prod.empty else 0
-    coste_h = (t_g / t_h) if t_h > 0 else 0
-    c4.metric("Coste Real x Huevo", f"{coste_h:.3f}€")
-
-    # Alertas Sanitarias Próximas
-    st.subheader("🗓️ Próximas Tareas Sanitarias")
-    if not salud.empty:
-        hoy = datetime.now().date()
-        salud['fecha_dt'] = pd.to_datetime(salud['proxima_fecha'], format='%d/%m/%Y').dt.date
-        pendientes = salud[salud['fecha_dt'] >= hoy].sort_values('fecha_dt')
-        if not pendientes.empty:
-            for _, s in pendientes.head(3).iterrows():
-                st.warning(f"🔔 {s['fecha_dt']}: {s['descripcion']} (Lote {s['lote']})")
-        else: st.info("No hay tareas pendientes.")
-
-    # Top Clientes
-    if not ventas.empty:
-        st.subheader("🏆 Mejores Clientes")
-        top_c = ventas[ventas['tipo_venta']=='Venta Cliente'].groupby('cliente')['cantidad'].sum().sort_values(ascending=False).head(3)
-        st.table(top_c)
-
-# --- GESTIÓN DE LOTES (INCLUYE CRECIMIENTO) ---
-elif menu == "🐣 Gestión de Lotes":
-    st.title("🐣 Control de Lotes y Crecimiento")
-    tab1, tab2 = st.tabs(["Nuevo Lote", "Estado y Madurez"])
+    c3.metric("Huevos Totales", int(t_h))
     
-    with tab1:
-        f_ll = st.date_input("Fecha llegada")
-        esp = st.selectbox("Especie", ["Gallinas", "Pollos", "Codornices"])
-        razas = {"Gallinas": ["Roja", "Blanca", "Chocolate"], "Pollos": ["Blanco Engorde", "Campero"], "Codornices": ["Codorniz"]}
-        rz = st.selectbox("Raza", razas[esp])
-        with st.form("f_l"):
-            c1, c2 = st.columns(2)
-            cant = c1.number_input("Cantidad", 1); edad = c1.number_input("Edad inicial días", 0)
-            prec = c2.number_input("Precio ud €", 0.0)
-            if st.form_submit_button("Registrar"):
-                conn = get_conn(); conn.execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, precio_ud, estado) VALUES (?,?,?,?,?,?,'Activo')", (f_ll.strftime("%d/%m/%Y"), esp, rz, int(cant), int(edad), prec))
-                conn.commit(); conn.close(); st.success("OK"); st.rerun()
+    t_a = lotes['cantidad'].sum() if not lotes.empty else 0
+    t_b = bajas['cantidad'].sum() if not bajas.empty else 0
+    c4.metric("Aves Vivas", int(t_a - t_b))
 
-    with tab2:
-        config_r = {"Roja": 140, "Blanca": 155, "Chocolate": 170, "Blanco Engorde": 45, "Campero": 90, "Codorniz": 42}
-        if not lotes.empty:
-            for _, r in lotes.iterrows():
-                edad = (datetime.now() - datetime.strptime(r["fecha"], "%d/%m/%Y")).days + r["edad_inicial"]
-                meta = config_r.get(r["raza"], 150)
-                st.write(f"**Lote {r['id']} ({r['raza']})**: {edad} días")
-                st.progress(min(100, int((edad/meta)*100))/100)
+# --- ALTA DE LOTES ---
+elif menu == "🐣 Alta de Lotes":
+    st.title("🐣 Registro de Lotes")
+    f_l = st.date_input("Fecha llegada")
+    esp = st.selectbox("Especie", ["Gallinas", "Pollos", "Codornices"])
+    razas = {"Gallinas": ["Roja", "Blanca", "Chocolate"], "Pollos": ["Blanco Engorde", "Campero"], "Codornices": ["Codorniz"]}
+    rz = st.selectbox("Raza", razas[esp])
+    
+    with st.form("f_lote"):
+        col1, col2 = st.columns(2)
+        cant = col1.number_input("Cantidad", 1)
+        edad = col1.number_input("Edad inicial (días)", 0)
+        prec = col2.number_input("Precio unidad €", 0.0)
+        
+        if st.form_submit_button("✅ GUARDAR LOTE"):
+            conn = get_conn()
+            conn.execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, precio_ud, estado) VALUES (?,?,?,?,?,?,'Activo')",
+                         (f_l.strftime("%d/%m/%Y"), esp, rz, int(cant), int(edad), prec))
+            conn.commit(); conn.close()
+            st.success(f"✔️ CONFIRMADO: Lote de {cant} {rz} guardado con éxito.")
+            st.balloons()
 
-# --- GASTOS E INVENTARIO (CONTROL DE SACOS) ---
+# --- GASTOS E INVENTARIO ---
 elif menu == "💸 Gastos e Inventario":
-    st.title("💸 Registro de Gastos y Pienso")
+    st.title("💸 Registro de Gastos")
     with st.form("f_g"):
         f = st.date_input("Fecha")
-        cat = st.selectbox("Categoría", ["Pienso Gallinas", "Pienso Pollos", "Pienso Codornices", "Infraestructura", "Salud", "Otros"])
-        con = st.text_input("Concepto (Ej: Saco 25kg)")
-        col1, col2 = st.columns(2)
-        imp = col1.number_input("Importe Total €", 0.0)
-        kg = col2.number_input("Kilos (si es pienso)", 0.0)
-        if st.form_submit_button("Guardar Gasto"):
-            conn = get_conn(); conn.execute("INSERT INTO gastos (fecha, categoria, concepto, cantidad, kilos_pienso) VALUES (?,?,?,?,?)", (f.strftime("%d/%m/%Y"), cat, con, imp, kg))
-            conn.commit(); conn.close(); st.success("Anotado"); st.rerun()
+        cat = st.selectbox("Dirigido a:", ["Pienso Gallinas", "Pienso Pollos", "Pienso Codornices", "Infraestructura", "Salud", "Otros"])
+        con = st.text_input("Detalle del gasto")
+        c1, c2 = st.columns(2)
+        imp = c1.number_input("Importe Total €", 0.0)
+        kg = c2.number_input("Kilos (si es pienso)", 0.0)
+        
+        if st.form_submit_button("💾 ANOTAR GASTO"):
+            conn = get_conn()
+            conn.execute("INSERT INTO gastos (fecha, categoria, concepto, cantidad, kilos_pienso) VALUES (?,?,?,?,?)",
+                         (f.strftime("%d/%m/%Y"), cat, con, imp, kg))
+            conn.commit(); conn.close()
+            st.success(f"✔️ CONFIRMADO: Gasto de {imp}€ en '{con}' registrado.")
 
 # --- VENTAS Y CLIENTES ---
 elif menu == "💰 Ventas y Clientes":
-    st.title("💰 Registro de Ventas")
-    tipo = st.radio("Destino:", ["Venta Cliente", "Consumo Propio"])
+    st.title("💰 Salida de Productos")
+    tipo = st.radio("Tipo:", ["Venta Cliente", "Consumo Propio"])
     with st.form("f_v"):
         f = st.date_input("Fecha")
-        cli = st.text_input("Cliente / Quién", "Consumo Propio" if tipo=="Consumo Propio" else "")
-        con = st.text_input("Producto (Ej: 3 docenas)")
+        cli = st.text_input("Nombre Cliente", "Familia" if tipo=="Consumo Propio" else "")
+        prod_v = st.text_input("Producto (ej: 2 docenas)")
         imp = st.number_input("Importe €", 0.0)
-        if st.form_submit_button("Registrar Venta"):
-            conn = get_conn(); conn.execute("INSERT INTO ventas (fecha, cliente, tipo_venta, concepto, cantidad) VALUES (?,?,?,?,?)", (f.strftime("%d/%m/%Y"), cli, tipo, con, imp))
-            conn.commit(); conn.close(); st.success("Venta guardada"); st.rerun()
+        
+        if st.form_submit_button("🤝 REGISTRAR VENTA"):
+            conn = get_conn()
+            conn.execute("INSERT INTO ventas (fecha, cliente, tipo_venta, concepto, cantidad) VALUES (?,?,?,?,?)",
+                         (f.strftime("%d/%m/%Y"), cli, tipo, prod_v, imp))
+            conn.commit(); conn.close()
+            st.success(f"✔️ CONFIRMADO: Registro de {imp}€ para {cli} guardado.")
 
 # --- SEGURIDAD ---
 elif menu == "💾 SEGURIDAD":
     st.title("💾 Copia de Seguridad")
-    st.warning("Descarga siempre el archivo antes de cerrar para no perder tus datos.")
     if os.path.exists(DB_PATH):
-        with open(DB_PATH, "rb") as f: st.download_button("📥 DESCARGAR BASE DE DATOS (.db)", f, "mi_corral.db")
-    up = st.file_uploader("📤 RESTAURAR COPIA", type="db")
+        with open(DB_PATH, "rb") as f:
+            st.download_button("📥 DESCARGAR COPIA (.db)", f, "corral_maestro.db")
+    
+    up = st.file_uploader("📤 RESTAURAR COPIA ANTERIOR", type="db")
     if up:
         with open(DB_PATH, "wb") as f: f.write(up.getbuffer())
-        st.success("Datos restaurados correctamente."); st.rerun()
+        st.success("✅ Datos restaurados. La aplicación se actualizará."); st.rerun()
 
-# --- OTROS REGISTROS (PRODUCCION, SALUD, BAJAS) ---
+# --- PRODUCCION, SALUD, BAJAS ---
 else:
     st.title(f"Registro: {menu}")
     with st.form("f_gen"):
-        f = st.date_input("Fecha"); l_id = st.number_input("ID Lote", 1)
-        if "Producción" in menu: valor = st.number_input("Huevos recogidos", 1)
-        elif "Salud" in menu: 
-            desc = st.text_area("Tratamiento"); prox = st.date_input("Próxima cita")
-        else: # Bajas
-            valor = st.number_input("Cantidad bajas", 1); mot = st.text_input("Motivo")
+        f = st.date_input("Fecha")
+        l_id = st.number_input("ID Lote", 1)
+        if "Producción" in menu:
+            val = st.number_input("Huevos", 1)
+        elif "Salud" in menu:
+            desc = st.text_area("Tratamiento"); prox = st.date_input("Próxima dosis")
+        else:
+            val = st.number_input("Cantidad bajas", 1); mot = st.text_input("Motivo")
             
-        if st.form_submit_button("Guardar"):
+        if st.form_submit_button("✅ GUARDAR DATOS"):
             conn = get_conn(); f_s = f.strftime("%d/%m/%Y")
-            if "Producción" in menu: conn.execute("INSERT INTO produccion (fecha, lote, huevos) VALUES (?,?,?)", (f_s, int(l_id), int(valor)))
-            elif "Salud" in menu: conn.execute("INSERT INTO salud (fecha, lote, descripcion, proxima_fecha, estado) VALUES (?,?,?,?,'Pendiente')", (f_s, int(l_id), desc, prox.strftime("%d/%m/%Y")))
-            elif "Bajas" in menu: conn.execute("INSERT INTO bajas (fecha, lote, cantidad, motivo) VALUES (?,?,?,?)", (f_s, int(l_id), int(valor), mot))
-            conn.commit(); conn.close(); st.success("Registrado"); st.rerun()
+            if "Producción" in menu:
+                conn.execute("INSERT INTO produccion (fecha, lote, huevos) VALUES (?,?,?)", (f_s, int(l_id), int(val)))
+                msg = f"{val} huevos registrados al lote {l_id}"
+            elif "Salud" in menu:
+                conn.execute("INSERT INTO salud (fecha, lote, descripcion, proxima_fecha, estado) VALUES (?,?,?,?,'Pendiente')", (f_s, int(l_id), desc, prox.strftime("%d/%m/%Y")))
+                msg = f"Tratamiento registrado. Próxima cita: {prox}"
+            else:
+                conn.execute("INSERT INTO bajas (fecha, lote, cantidad, motivo) VALUES (?,?,?,?)", (f_s, int(l_id), int(val), mot))
+                msg = f"{val} bajas anotadas al lote {l_id}"
+            conn.commit(); conn.close()
+            st.success(f"✔️ CONFIRMADO: {msg}.")

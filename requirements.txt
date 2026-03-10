@@ -1,7 +1,5 @@
 streamlit
 pandas
-plotly
-xlsxwriter
-fpdf
-psycopg2-binary
 sqlalchemy
+psycopg2-binary
+st-postgresql

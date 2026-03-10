@@ -82,23 +82,40 @@ if menu=="Dashboard":
     c4.metric("Gastos", f"{total_gasto:.2f}€")
     c5.metric("Beneficio", f"{beneficio:.2f}€", delta=float(beneficio))
 
-# ====================== 2. ALTA DE ANIMALES ======================
+# ====================== 2. ALTA DE ANIMALES (RAZAS ESPECÍFICAS) ======================
 elif menu=="Alta Animales":
     st.title("🐣 Entrada de animales")
+    
     with st.form("f_alta"):
-        fecha = st.date_input("Fecha")
-        especie = st.selectbox("Especie", ["Gallinas","Pollos","Codornices"])
-        raza = st.text_input("Raza (Ej: Roja, Campero...)")
-        cantidad = st.number_input("Cantidad", 1)
-        edad = st.number_input("Edad inicial días", 0)
-        precio = st.number_input("Precio unidad €", 0.0)
-        if st.form_submit_button("Guardar Lote"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fecha = st.date_input("Fecha de llegada")
+            especie = st.selectbox("Especie", ["Gallinas", "Pollos", "Codornices"])
+            
+            # Razas específicas según hablamos
+            if especie == "Gallinas":
+                raza = st.selectbox("Raza", ["Blanca", "Roja", "Chocolate"])
+            elif especie == "Pollos":
+                raza = st.selectbox("Raza", ["Blanco Engorde", "Campero"])
+            else:
+                raza = st.selectbox("Raza", ["Codorniz"])
+                
+        with col2:
+            cantidad = st.number_input("Cantidad de aves", min_value=1, step=1)
+            edad = st.number_input("Edad inicial (días)", min_value=0, step=1)
+            precio = st.number_input("Precio por unidad (€)", min_value=0.0, format="%.2f")
+            
+        if st.form_submit_button("✅ GUARDAR LOTE"):
             conn = get_conn()
-            conn.execute("INSERT INTO lotes (fecha,especie,raza,cantidad,edad_inicial,precio_ud,estado) VALUES (?,?,?,?,?,?,?)",
-                         (fecha.strftime("%d/%m/%Y"), especie, raza, cantidad, edad, precio, "Activo"))
+            conn.execute("""
+                INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, precio_ud, estado) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (fecha.strftime("%d/%m/%Y"), especie, raza, int(cantidad), int(edad), precio, "Activo"))
             conn.commit()
             conn.close()
-            st.success("✅ Lote guardado")
+            st.success(f"✅ Lote de {especie} {raza} guardado con éxito.")
+            st.balloons()
 
 # ====================== 3. PUESTA ======================
 elif menu=="Puesta":
@@ -184,3 +201,4 @@ elif menu=="💾 SEGURIDAD":
         with open(DB_PATH, "wb") as f:
             f.write(archivo.getbuffer())
         st.success("✅ Datos restaurados correctamente. Refresca la página.")
+

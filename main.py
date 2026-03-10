@@ -1,8 +1,15 @@
 import streamlit as st
-import pandas as pd
 from sqlalchemy import text
-import io
-from datetime import datetime, timedelta
+
+# Intentar conectar
+conn = st.connection("postgresql", type="sql")
+
+try:
+    with conn.session as s:
+        s.execute(text("SELECT 1"))
+    st.success("✅ ¡Conexión exitosa con Supabase!")
+except Exception as e:
+    st.error(f"❌ Error de conexión: {e}")
 
 # 1. CONFIGURACIÓN VISUAL
 st.set_page_config(page_title="CORRAL MAESTRO CLOUD", layout="wide", page_icon="🐓")
@@ -202,3 +209,4 @@ elif menu == "🛠️ ADMIN":
                     conn.query(f"SELECT * FROM {t}", ttl=0).to_excel(writer, index=False, sheet_name=t)
             st.download_button("Descargar Excel", output.getvalue(), "corral_backup.xlsx")
     else: st.error("No tienes permisos de administrador.")
+

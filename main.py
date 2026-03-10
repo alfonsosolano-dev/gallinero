@@ -1,25 +1,27 @@
 import streamlit as st
 from sqlalchemy import create_engine, text
 
-st.title("🚜 Intento de Conexión por IP Directa")
+st.title("🚜 Intento Final: Puerto Estándar + IP")
 
-# Recuperamos la URL con la IP
+# Recuperamos la URL de los secrets
 db_url = st.secrets["connections"]["postgresql"]["url"]
 
-# Creamos el motor forzando IPv4 y tiempos de espera cortos
+# Configuramos el motor con más tiempo de espera
 engine = create_engine(
     db_url, 
     connect_args={
-        "connect_timeout": 10,
-        "sslmode": "prefer"
+        "connect_timeout": 30  # Le damos 30 segundos para conectar
     }
 )
 
 try:
     with engine.connect() as conn:
         res = conn.execute(text("SELECT 1"))
-        st.success("✅ ¡CONECTADO POR FIN!")
+        st.success("✅ ¡CONEXIÓN ESTABLECIDA!")
         st.balloons()
+        
+        # Si conecta, mostramos que estamos listos
+        st.info("Ya puedes volver a poner el código completo del corral.")
 except Exception as e:
-    st.error(f"❌ Error con IP: {e}")
-    st.info("Si esto falla, el firewall de Streamlit está bloqueando la salida al puerto 6543.")
+    st.error(f"❌ Error con Puerto 5432: {e}")
+    st.warning("Si esto falla, el servidor de Streamlit tiene bloqueada la salida a bases de datos externas.")

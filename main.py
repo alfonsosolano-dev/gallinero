@@ -1,113 +1,186 @@
 import streamlit as st
-import pandas as pd
 import sqlite3
+import pandas as pd
+import os
 import io
 from datetime import datetime, timedelta
+import plotly.express as px
 
-# 1. CONFIGURACIÓN
-st.set_page_config(page_title="CORRAL MAESTRO LOCAL", layout="wide", page_icon="🐓")
+# ====================== CONFIGURACIÓN DE PÁGINA ======================
+st.set_page_config(page_title="CORRAL MAESTRO PRO", layout="wide", page_icon="🐓")
 
-# ====================== 2. MOTOR DE BASE DE DATOS LOCAL ======================
-def get_connection():
-    return sqlite3.connect("corral.db", check_same_thread=False)
+# ====================== BASE DE DATOS ======================
+# Usamos una ruta simple para asegurar compatibilidad en la nube
+DB_PATH = "corral_maestro_pro.db"
+
+def get_conn():
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def inicializar_db():
-    conn = get_connection()
+    conn = get_conn()
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS lotes 
-        (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, cantidad INTEGER, estado TEXT, edad_inicial INTEGER, usuario TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS produccion 
-        (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote_id INTEGER, cantidad INTEGER, usuario TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS bajas 
-        (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote_id INTEGER, cantidad INTEGER, motivo TEXT, usuario TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS gastos 
-        (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, concepto TEXT, importe REAL, categoria TEXT, usuario TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS puesta_manual 
-        (id INTEGER PRIMARY KEY AUTOINCREMENT, lote_id INTEGER, fecha_primera_puesta TEXT)''')
+    # Lotes
+    c.execute("""CREATE TABLE IF NOT EXISTS lotes(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, 
+        cantidad INTEGER, edad_inicial INTEGER, precio_ud REAL, estado TEXT)""")
+    # Producción huevos
+    c.execute("CREATE TABLE IF NOT EXISTS produccion(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, huevos INTEGER)")
+    # Gastos
+    c.execute("CREATE TABLE IF NOT EXISTS gastos(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, concepto TEXT, cantidad REAL)")
+    # Ventas
+    c.execute("CREATE TABLE IF NOT EXISTS ventas(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, concepto TEXT, cantidad REAL)")
+    # Salud
+    c.execute("CREATE TABLE IF NOT EXISTS salud(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, descripcion TEXT)")
+    # Bajas
+    c.execute("CREATE TABLE IF NOT EXISTS bajas(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, cantidad INTEGER, motivo TEXT)")
+    # Primera puesta
+    c.execute("CREATE TABLE IF NOT EXISTS primera_puesta(id INTEGER PRIMARY KEY AUTOINCREMENT, lote INTEGER, fecha TEXT)")
     conn.commit()
     conn.close()
 
 inicializar_db()
 
-# ====================== 3. LOGIN SENCILLO ======================
-if 'auth' not in st.session_state:
-    st.session_state.update({'auth': False, 'user': ""})
+# ====================== FUNCIONES AUXILIARES ======================
+def cargar(tabla):
+    conn = get_conn()
+    try:
+        return pd.read_sql(f"SELECT * FROM {tabla}", conn)
+    except:
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
-if not st.session_state.auth:
-    st.title("🔐 Acceso al Corral")
-    u = st.text_input("Usuario")
-    p = st.text_input("Clave", type="password")
-    if st.button("ENTRAR"):
-        if u == "admin" and p == "1234":
-            st.session_state.update({'auth': True, 'user': "Administrador"})
-            st.rerun()
-        else: st.error("Clave incorrecta")
-    st.stop()
+# ====================== MENÚ LATERAL ======================
+st.sidebar.title("🐓 CORRAL PRO")
+menu = st.sidebar.selectbox("MENÚ",[
+    "Dashboard", "Alta Animales", "Puesta", "Crecimiento", 
+    "Gastos", "Ventas", "Salud", "Bajas", "Rentabilidad", "💾 SEGURIDAD"
+])
 
-# ====================== 4. INTERFAZ Y MENÚ ======================
-menu = st.sidebar.radio("MENÚ", ["🏠 DASHBOARD", "🥚 PUESTA", "🐣 ALTA AVES", "☠️ BAJAS", "💸 GASTOS", "💾 SEGURIDAD"])
+# ====================== 1. DASHBOARD ======================
+if menu=="Dashboard":
+    st.title("🏠 Dashboard General")
+    lotes = cargar("lotes")
+    prod = cargar("produccion")
+    gastos = cargar("gastos")
+    ventas = cargar("ventas")
+    bajas = cargar("bajas")
 
-# ---------------- 🏠 DASHBOARD ----------------
-if menu == "🏠 DASHBOARD":
-    st.title("🏠 Estado General")
-    conn = get_connection()
-    df_l = pd.read_sql("SELECT * FROM lotes", conn)
-    df_b = pd.read_sql("SELECT * FROM bajas", conn)
-    conn.close()
+    total_ani = lotes["cantidad"].sum() if not lotes.empty else 0
+    total_bajas = bajas["cantidad"].sum() if not bajas.empty else 0
+    aves_vivas = total_ani - total_bajas
     
-    total_aves = (df_l['cantidad'].sum() if not df_l.empty else 0) - (df_b['cantidad'].sum() if not df_b.empty else 0)
-    st.metric("Aves en el Corral", f"{int(total_aves)} uds")
+    total_huevos = prod["huevos"].sum() if not prod.empty else 0
+    total_gasto = gastos["cantidad"].sum() if not gastos.empty else 0
+    total_venta = ventas["cantidad"].sum() if not ventas.empty else 0
+    beneficio = total_venta - total_gasto
 
-# ---------------- 🥚 PUESTA ----------------
-elif menu == "🥚 PUESTA":
-    st.title("🥚 Registro de Huevos")
-    conn = get_connection()
-    activos = pd.read_sql("SELECT * FROM lotes WHERE estado='Activo'", conn)
-    if activos.empty: st.warning("No hay lotes.")
-    else:
-        with st.form("f"):
-            l_id = st.selectbox("Lote", activos['id'].tolist())
-            cant = st.number_input("Huevos", 1)
-            if st.form_submit_button("Guardar"):
-                c = conn.cursor()
-                c.execute("INSERT INTO produccion (fecha, lote_id, cantidad) VALUES (?,?,?)", 
-                          (datetime.now().strftime('%d/%m/%Y'), l_id, cant))
-                conn.commit()
-                st.success("¡Registrado!")
-    conn.close()
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Aves Vivas", int(aves_vivas))
+    c2.metric("Huevos", int(total_huevos))
+    c3.metric("Ventas", f"{total_venta:.2f}€")
+    c4.metric("Gastos", f"{total_gasto:.2f}€")
+    c5.metric("Beneficio", f"{beneficio:.2f}€", delta=float(beneficio))
 
-# ---------------- 🐣 ALTA AVES ----------------
-elif menu == "🐣 ALTA AVES":
-    st.title("🐣 Nuevo Lote")
-    with st.form("f"):
-        esp = st.selectbox("Especie", ["Gallinas", "Pollos"])
-        rz = st.text_input("Raza", "Roja")
-        can = st.number_input("Cantidad", 1)
-        ed = st.number_input("Edad inicial (días)", 0)
-        if st.form_submit_button("Crear"):
-            conn = get_connection()
-            c = conn.cursor()
-            c.execute("INSERT INTO lotes (fecha, especie, raza, cantidad, estado, edad_inicial) VALUES (?,?,?,?,'Activo',?)",
-                      (datetime.now().strftime('%d/%m/%Y'), esp, rz, can, ed))
+# ====================== 2. ALTA DE ANIMALES ======================
+elif menu=="Alta Animales":
+    st.title("🐣 Entrada de animales")
+    with st.form("f_alta"):
+        fecha = st.date_input("Fecha")
+        especie = st.selectbox("Especie", ["Gallinas","Pollos","Codornices"])
+        raza = st.text_input("Raza (Ej: Roja, Campero...)")
+        cantidad = st.number_input("Cantidad", 1)
+        edad = st.number_input("Edad inicial días", 0)
+        precio = st.number_input("Precio unidad €", 0.0)
+        if st.form_submit_button("Guardar Lote"):
+            conn = get_conn()
+            conn.execute("INSERT INTO lotes (fecha,especie,raza,cantidad,edad_inicial,precio_ud,estado) VALUES (?,?,?,?,?,?,?)",
+                         (fecha.strftime("%d/%m/%Y"), especie, raza, cantidad, edad, precio, "Activo"))
             conn.commit()
             conn.close()
-            st.success("Lote creado")
+            st.success("✅ Lote guardado")
 
-# ---------------- 💾 SEGURIDAD (LA CLAVE) ----------------
-elif menu == "💾 SEGURIDAD":
-    st.title("💾 Gestión de Datos")
-    st.info("Como estamos en modo local, usa esta sección para no perder tus datos.")
+# ====================== 3. PUESTA ======================
+elif menu=="Puesta":
+    st.title("🥚 Registro de huevos")
+    lotes = cargar("lotes")
+    if not lotes.empty:
+        with st.form("f_puesta"):
+            lote = st.selectbox("Lote ID", lotes["id"])
+            fecha = st.date_input("Fecha")
+            huevos = st.number_input("Cantidad de Huevos", 0)
+            if st.form_submit_button("Guardar Producción"):
+                conn = get_conn()
+                conn.execute("INSERT INTO produccion (fecha,lote,huevos) VALUES (?,?,?)", (fecha.strftime("%d/%m/%Y"), lote, huevos))
+                conn.commit()
+                conn.close()
+                st.success("✅ Guardado")
+    else: st.info("Crea un lote primero")
+
+# ====================== 4. CRECIMIENTO ======================
+elif menu=="Crecimiento":
+    st.title("📈 Crecimiento / Madurez")
+    lotes = cargar("lotes")
+    for _, row in lotes.iterrows():
+        fecha_ent = datetime.strptime(row["fecha"], "%d/%m/%Y")
+        edad_actual = (datetime.now() - fecha_ent).days + row["edad_inicial"]
+        meta = 140 if row["especie"]=="Gallinas" else 90
+        prog = min(1.0, edad_actual/meta)
+        st.write(f"**Lote {row['id']}**: {row['especie']} - {edad_actual} días")
+        st.progress(prog)
+
+# ====================== 5. GASTOS / VENTAS / SALUD / BAJAS ======================
+elif menu in ["Gastos", "Ventas", "Salud", "Bajas"]:
+    st.title(f"📝 Registro de {menu}")
+    with st.form("f_generico"):
+        fecha = st.date_input("Fecha")
+        if menu == "Gastos" or menu == "Ventas":
+            concepto = st.text_input("Concepto")
+            monto = st.number_input("Importe €", 0.0)
+        elif menu == "Salud":
+            lote = st.number_input("ID Lote", 1)
+            desc = st.text_area("Descripción")
+        elif menu == "Bajas":
+            lote = st.number_input("ID Lote", 1)
+            cant = st.number_input("Cantidad", 1)
+            motivo = st.text_input("Motivo")
+            
+        if st.form_submit_button(f"Registrar {menu}"):
+            conn = get_conn()
+            if menu=="Gastos": conn.execute("INSERT INTO gastos (fecha,concepto,cantidad) VALUES (?,?,?)",(fecha.strftime("%d/%m/%Y"), concepto, monto))
+            elif menu=="Ventas": conn.execute("INSERT INTO ventas (fecha,concepto,cantidad) VALUES (?,?,?)",(fecha.strftime("%d/%m/%Y"), concepto, monto))
+            elif menu=="Salud": conn.execute("INSERT INTO salud (fecha,lote,descripcion) VALUES (?,?,?)",(fecha.strftime("%d/%m/%Y"), lote, desc))
+            elif menu=="Bajas": conn.execute("INSERT INTO bajas (fecha,lote,cantidad,motivo) VALUES (?,?,?,?)",(fecha.strftime("%d/%m/%Y"), lote, cant, motivo))
+            conn.commit()
+            conn.close()
+            st.success("✅ Registrado")
+
+# ====================== 6. RENTABILIDAD ======================
+elif menu=="Rentabilidad":
+    st.title("📊 Análisis Económico")
+    g = cargar("gastos")
+    v = cargar("ventas")
+    if not g.empty or not v.empty:
+        df = pd.concat([g.assign(Tipo="Gasto"), v.assign(Tipo="Venta")])
+        fig = px.bar(df, x="fecha", y="cantidad", color="Tipo", barmode="group", title="Gastos vs Ventas")
+        st.plotly_chart(fig, use_container_width=True)
+
+# ====================== 7. 💾 SEGURIDAD (IMPORTANTE) ======================
+elif menu=="💾 SEGURIDAD":
+    st.title("💾 Gestión de Datos y Seguridad")
+    st.warning("En la nube, los datos pueden borrarse si la app se reinicia. ¡Descarga tu copia siempre!")
     
-    # BOTÓN PARA DESCARGAR
-    with open("corral.db", "rb") as f:
-        st.download_button("📥 DESCARGAR COPIA DE SEGURIDAD (DB)", f, "corral_backup.db")
+    # Descargar
+    if os.path.exists(DB_PATH):
+        with open(DB_PATH, "rb") as f:
+            st.download_button("📥 DESCARGAR BASE DE DATOS (.db)", f, file_name="corral_maestro.db")
     
     st.divider()
     
-    # BOTÓN PARA SUBIR
-    st.subheader("📤 Restaurar Copia")
-    archivo_subido = st.file_uploader("Sube tu archivo .db para recuperar tus datos", type="db")
-    if archivo_subido:
-        with open("corral.db", "wb") as f:
-            f.write(archivo_subido.getbuffer())
-        st.success("✅ Datos restaurados. ¡Reinicia la página!")
+    # Subir
+    st.subheader("📤 Restaurar Copia de Seguridad")
+    archivo = st.file_uploader("Saca tu archivo .db guardado para recuperar todo", type="db")
+    if archivo is not None:
+        with open(DB_PATH, "wb") as f:
+            f.write(archivo.getbuffer())
+        st.success("✅ Datos restaurados correctamente. Refresca la página.")

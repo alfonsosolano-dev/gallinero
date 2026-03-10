@@ -1,26 +1,24 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
 from sqlalchemy import create_engine, text
 
-st.title("🚜 Prueba de Conexión Suprema")
+# Título de prueba para ver si carga
+st.title("🚜 Prueba de Conexión")
 
-# Obtenemos la URL de los secrets
+# Verificamos si los secrets están cargados
+if "connections" not in st.secrets:
+    st.error("❌ No se encuentran los 'Secrets'. Revisa la configuración en Streamlit Cloud.")
+    st.stop()
+
+# Recuperamos la URL del Secret (Asegúrate de haber puesto el puerto 6543 como hablamos antes)
 db_url = st.secrets["connections"]["postgresql"]["url"]
 
-# Crear el motor de conexión manualmente
+# Creamos el motor de base de datos
 engine = create_engine(db_url)
 
 try:
     with engine.connect() as conn:
         res = conn.execute(text("SELECT 1"))
         st.success("✅ ¡CONECTADO A SUPABASE!")
-        
-        # Crear tabla de prueba
-        conn.execute(text("CREATE TABLE IF NOT EXISTS prueba (id SERIAL PRIMARY KEY, nombre TEXT)"))
-        conn.commit()
-        st.info("Tabla de prueba creada con éxito.")
-        
 except Exception as e:
-    st.error(f"❌ Sigue fallando. Error: {e}")
-    st.info("Intentando modo alternativo...")
+    st.error(f"❌ Error de conexión: {e}")

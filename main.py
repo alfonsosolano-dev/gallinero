@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timedelta
 
 # ====================== 1. CONFIGURACIÓN Y BASE DE DATOS ======================
-st.set_page_config(page_title="CORRAL MAESTRO ELITE V17.2", layout="wide", page_icon="🐓")
+st.set_page_config(page_title="CORRAL MAESTRO ELITE V17.3", layout="wide", page_icon="🐓")
 DB_PATH = "corral_maestro_pro.db"
 
 def get_conn():
@@ -17,12 +17,10 @@ def inicializar_db():
     c.execute("CREATE TABLE IF NOT EXISTS lotes(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, cantidad INTEGER, edad_inicial INTEGER, precio_ud REAL, estado TEXT)")
     c.execute("CREATE TABLE IF NOT EXISTS produccion(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, huevos INTEGER)")
     c.execute("CREATE TABLE IF NOT EXISTS gastos(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, categoria TEXT, concepto TEXT, cantidad REAL, kilos_pienso REAL)")
-    # Se añade la columna kilos_finales a ventas
     c.execute("CREATE TABLE IF NOT EXISTS ventas(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, cliente TEXT, tipo_venta TEXT, concepto TEXT, cantidad REAL, lote_id INTEGER, kilos_finales REAL)")
     c.execute("CREATE TABLE IF NOT EXISTS bajas(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, cantidad INTEGER, motivo TEXT, perdida_estimada REAL)")
     c.execute("CREATE TABLE IF NOT EXISTS hitos(id INTEGER PRIMARY KEY AUTOINCREMENT, lote_id INTEGER, tipo TEXT, fecha TEXT)")
     
-    # Parche por si la columna kilos_finales no existe
     try: c.execute("ALTER TABLE ventas ADD COLUMN kilos_finales REAL DEFAULT 0")
     except: pass
     conn.commit(); conn.close()
@@ -74,11 +72,14 @@ g_tot = gastos['cantidad'].sum() if not gastos.empty else 0
 inv_ini = (lotes['cantidad'] * lotes['precio_ud']).sum() if not lotes.empty else 0
 
 # ====================== 3. INTERFAZ ======================
-seccion = st.sidebar.radio("MENÚ ELITE:", ["🏠 Dashboard", "🎄 Plan Navidad", "🐣 Alta Lotes", "📈 Crecimiento", "🥚 Producción", "🌟 Primera Puesta", "💸 Gastos", "💰 Ventas/Consumo", "💀 Bajas", "📜 Histórico", "💾 SEGURIDAD"])
+seccion = st.sidebar.radio("MENÚ ELITE:", [
+    "🏠 Dashboard", "🎄 Plan Navidad", "🐣 Alta Lotes", "📈 Crecimiento", 
+    "🥚 Producción", "🌟 Primera Puesta", "💸 Gastos", "💰 Ventas/Consumo", 
+    "💀 Bajas", "📜 Histórico", "💾 SEGURIDAD"
+])
 
 if seccion == "🏠 Dashboard":
     st.title("🏠 Control Maestro")
-    # Alertas triples
     if st_gal < 5: st.error(f"🚨 Pienso Gallinas Crítico: {st_gal:.1f}kg")
     if st_pol < 5: st.error(f"🚨 Pienso Pollos Crítico: {st_pol:.1f}kg")
     if st_cod < 2: st.error(f"🚨 Pienso Codornices Crítico: {st_cod:.1f}kg")
@@ -103,11 +104,9 @@ elif seccion == "🎄 Plan Navidad":
     with col1:
         st.info("🐔 **Pollo Blanco (Rápido)**")
         st.write(f"Fecha compra: **{(obj - timedelta(days=55)).strftime('%d de Octubre')}**")
-        st.write("- Ciclo: 7-8 semanas\n- Crecimiento explosivo\n- Carne tierna")
     with col2:
         st.success("🐓 **Pollo Campero (Lento)**")
         st.write(f"Fecha compra: **{(obj - timedelta(days=90)).strftime('%d de Septiembre')}**")
-        st.write("- Ciclo: 12-13 semanas\n- Sabor tradicional\n- Carne firme")
 
 elif seccion == "📈 Crecimiento":
     st.title("📈 Desarrollo de Lotes")
@@ -116,9 +115,28 @@ elif seccion == "📈 Crecimiento":
         edad = (datetime.now() - datetime.strptime(r["fecha"], "%d/%m/%Y")).days + r["edad_inicial"]
         m = metas.get(r["raza"], 100); porc = min(100, int((edad/m)*100))
         ya_pone = "🥚" if not hitos[(hitos['lote_id']==r['id']) & (hitos['tipo']=='Primera Puesta')].empty else ""
-        st.write(f"**Lote {r['id']} ({r['raza']})** {ya_pone} - {edad} días de vida")
+        st.write(f"**Lote {r['id']} ({r['raza']})** {ya_pone} - {edad} días")
         st.progress(porc/100)
-        st.caption(f"Progreso de madurez: {porc}%")
+
+elif seccion == "🥚 Producción":
+    st.title("🥚 Registro de Producción")
+    with st.form("f_prod"):
+        f = st.date_input("Fecha")
+        ids = lotes[lotes['especie'].isin(['Gallinas', 'Codornices'])]['id'].tolist() if not lotes.empty else []
+        l_id = st.selectbox("Lote ID", ids); cant = st.number_input("Nº Huevos", 1)
+        if st.form_submit_button("Guardar"):
+            conn = get_conn(); conn.execute("INSERT INTO produccion (fecha, lote, huevos) VALUES (?,?,?)", (f.strftime("%d/%m/%Y"), int(l_id), int(cant)))
+            conn.commit(); st.rerun()
+
+elif seccion == "🌟 Primera Puesta":
+    st.title("🌟 Registro de Primera Puesta")
+    with st.form("f_puesta"):
+        ids = lotes[lotes['especie'].isin(['Gallinas', 'Codornices'])]['id'].tolist() if not lotes.empty else []
+        l_id = st.selectbox("Lote ID", ids)
+        f_h = st.date_input("Fecha primer huevo")
+        if st.form_submit_button("Guardar Hito de Puesta"):
+            conn = get_conn(); conn.execute("INSERT INTO hitos (lote_id, tipo, fecha) VALUES (?, 'Primera Puesta', ?)", (int(l_id), f_h.strftime("%d/%m/%Y")))
+            conn.commit(); st.rerun()
 
 elif seccion == "💰 Ventas/Consumo":
     st.title("💰 Ventas y Beneficio Real")
@@ -126,25 +144,25 @@ elif seccion == "💰 Ventas/Consumo":
         f = st.date_input("Fecha"); t = st.radio("Tipo", ["Venta Cliente", "Consumo Propio"])
         l_id = st.selectbox("Lote de procedencia", lotes['id'].tolist() if not lotes.empty else [])
         colx, coly = st.columns(2)
-        con = colx.text_input("Producto (ej: 1 pollo)"); imp = coly.number_input("Precio Venta €", 0.0)
+        con = colx.text_input("Producto"); imp = coly.number_input("Precio Venta €", 0.0)
         kg_f = colx.number_input("Kilos Finales (kg)", 0.0); cli = coly.text_input("Cliente/Quién")
         if st.form_submit_button("Registrar Venta"):
             conn = get_conn(); conn.execute("INSERT INTO ventas (fecha, cliente, tipo_venta, concepto, cantidad, lote_id, kilos_finales) VALUES (?,?,?,?,?,?,?)", (f.strftime("%d/%m/%Y"), cli, t, con, imp, int(l_id), kg_f))
             conn.commit(); st.rerun()
-    
-    if not ventas.empty:
-        st.subheader("Análisis de Rendimiento")
-        l_data = lotes.set_index('id')['precio_ud'].to_dict()
-        ventas['coste_compra'] = ventas['lote_id'].map(l_data)
-        ventas['beneficio_neto'] = ventas['cantidad'] - ventas['coste_compra']
-        # Evitar división por cero
-        ventas['precio_kg'] = ventas.apply(lambda r: r['cantidad']/r['kilos_finales'] if r['kilos_finales'] > 0 else 0, axis=1)
-        st.dataframe(ventas[['fecha', 'concepto', 'kilos_finales', 'cantidad', 'precio_kg', 'beneficio_neto']], use_container_width=True)
 
-# --- LAS SECCIONES DE ALTA, PRODUCCIÓN, PUESTA, BAJAS, GASTOS Y SEGURIDAD SE MANTIENEN ---
+elif seccion == "💀 Bajas":
+    st.title("💀 Registro de Bajas")
+    with st.form("f_baja"):
+        f = st.date_input("Fecha"); l_id = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
+        cant = st.number_input("Cantidad", 1); mot = st.text_input("Motivo")
+        if st.form_submit_button("Registrar Baja"):
+            l_sel = lotes[lotes['id']==l_id].iloc[0]; perd = cant * l_sel['precio_ud']
+            conn = get_conn(); conn.execute("INSERT INTO bajas (fecha, lote, cantidad, motivo, perdida_estimada) VALUES (?,?,?,?,?)", (f.strftime("%d/%m/%Y"), int(l_id), int(cant), mot, perd))
+            conn.commit(); st.rerun()
+
 elif seccion == "🐣 Alta Lotes":
     st.title("🐣 Nuevo Lote")
-    with st.form("f1"):
+    with st.form("f_alta"):
         f = st.date_input("Fecha"); esp = st.selectbox("Especie", ["Gallinas", "Pollos", "Codornices"])
         rz = st.selectbox("Raza", ["Roja", "Blanca", "Chocolate", "Blanco Engorde", "Campero", "Codorniz"])
         c1, c2 = st.columns(2); cant = c1.number_input("Cantidad", 1); ed = c1.number_input("Edad (días)", 0); pr = c2.number_input("Precio/Ud", 0.0)
@@ -152,28 +170,9 @@ elif seccion == "🐣 Alta Lotes":
             conn = get_conn(); conn.execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, precio_ud, estado) VALUES (?,?,?,?,?,?,'Activo')", (f.strftime("%d/%m/%Y"), esp, rz, int(cant), int(ed), pr))
             conn.commit(); st.rerun()
 
-elif seccion == "🥚 Producción":
-    st.title("🥚 Registro de Huevos")
-    with st.form("f2"):
-        f = st.date_input("Fecha"); ids = lotes[lotes['especie'].isin(['Gallinas', 'Codornices'])]['id'].tolist() if not lotes.empty else []
-        l_id = st.selectbox("Lote ID", ids); cant = st.number_input("Nº Huevos", 1)
-        if st.form_submit_button("Guardar"):
-            conn = get_conn(); conn.execute("INSERT INTO produccion (fecha, lote, huevos) VALUES (?,?,?)", (f.strftime("%d/%m/%Y"), int(l_id), int(cant)))
-            conn.commit(); st.rerun()
-
-elif seccion == "💀 Bajas":
-    st.title("💀 Registro de Bajas")
-    with st.form("f4"):
-        f = st.date_input("Fecha"); l_id = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
-        cant = st.number_input("Cantidad", 1); mot = st.text_input("Motivo")
-        if st.form_submit_button("Registrar"):
-            l_sel = lotes[lotes['id']==l_id].iloc[0]; perd = cant * l_sel['precio_ud']
-            conn = get_conn(); conn.execute("INSERT INTO bajas (fecha, lote, cantidad, motivo, perdida_estimada) VALUES (?,?,?,?,?)", (f.strftime("%d/%m/%Y"), int(l_id), int(cant), mot, perd))
-            conn.commit(); st.rerun()
-
 elif seccion == "💸 Gastos":
-    st.title("💸 Gastos")
-    with st.form("f5"):
+    st.title("💸 Otros Gastos")
+    with st.form("f_gasto"):
         f = st.date_input("Fecha"); cat = st.selectbox("Categoría", ["Pienso Gallinas", "Pienso Pollos", "Pienso Codornices", "Otros"])
         con = st.text_input("Concepto"); c1, c2 = st.columns(2); imp = c1.number_input("Importe €", 0.0); kg = c2.number_input("Kilos", 0.0)
         if st.form_submit_button("Guardar"):
@@ -191,6 +190,6 @@ elif seccion == "📜 Histórico":
 elif seccion == "💾 SEGURIDAD":
     st.title("💾 Seguridad")
     if os.path.exists(DB_PATH):
-        with open(DB_PATH, "rb") as f: st.download_button("Descargar DB", f, "corral.db")
-    if st.button("BORRAR TODO"):
+        with open(DB_PATH, "rb") as f: st.download_button("Descargar Base de Datos", f, "corral.db")
+    if st.button("🔥 FORMATEAR SISTEMA"):
         if os.path.exists(DB_PATH): os.remove(DB_PATH); st.rerun()

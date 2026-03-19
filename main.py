@@ -5,9 +5,9 @@ from datetime import datetime, timedelta
 import io
 
 # =================================================================
-# BLOQUE 1: MOTOR DE DATOS (AUTO-REPARABLE)
+# BLOQUE 1: MOTOR DE DATOS (REFORZADO)
 # =================================================================
-st.set_page_config(page_title="CORRAL IA V44 - FINAL", layout="wide", page_icon="🚜")
+st.set_page_config(page_title="CORRAL IA MAESTRO V45", layout="wide", page_icon="🚜")
 DB_PATH = "corral_maestro_pro.db"
 
 def get_conn():
@@ -16,7 +16,6 @@ def get_conn():
 def inicializar_db():
     conn = get_conn()
     c = conn.cursor()
-    # Esquema maestro de todas las tablas necesarias
     tablas = {
         "lotes": "id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, cantidad INTEGER, edad_inicial INTEGER, precio_ud REAL, estado TEXT",
         "produccion": "id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, huevos INTEGER",
@@ -26,7 +25,7 @@ def inicializar_db():
     }
     for n, e in tablas.items():
         c.execute(f"CREATE TABLE IF NOT EXISTS {n} ({e})")
-        # Parches de seguridad para evitar OperationalError (columnas faltantes)
+        # PARCHES DE SEGURIDAD (Evitan errores de columnas faltantes)
         if n == "ventas":
             for col in ["unidades INTEGER", "ilos_finale REAL", "lote_id INTEGER"]:
                 try: c.execute(f"ALTER TABLE ventas ADD COLUMN {col}")
@@ -43,183 +42,167 @@ def cargar_tabla(t):
     except: return pd.DataFrame()
 
 # =================================================================
-# BLOQUE 2: LÓGICA DE CONSUMO Y COSTES
+# BLOQUE 2: LÓGICA DE INTELIGENCIA ARTIFICIAL
 # =================================================================
 CONFIG_IA = {
-    "Roja": {"cons_base": 0.110}, "Blanca": {"cons_base": 0.105},
-    "Mochuela": {"cons_base": 0.095}, "Blanco Engorde": {"cons_base": 0.180, "madurez": 55},
-    "Campero": {"cons_base": 0.140, "madurez": 90}
+    "Roja": {"cons_base": 0.110, "consejo": "Alta puesta. Calcio vital."},
+    "Blanca": {"cons_base": 0.105, "consejo": "Vuelan mucho."},
+    "Mochuela": {"cons_base": 0.095, "consejo": "Muy rústica."},
+    "Blanco Engorde": {"cons_base": 0.180, "madurez": 55, "consejo": "Crecimiento rápido."},
+    "Campero": {"cons_base": 0.140, "madurez": 90, "consejo": "Sabor excelente."}
 }
 
-def calcular_consumo_dia_exacto(raza, edad, cantidad):
+def calcular_consumo_especifico(raza, edad, cantidad):
     base = CONFIG_IA.get(raza, {}).get("cons_base", 0.120)
-    # Curva de crecimiento: pollitos (30%), jóvenes (60%), adultos (100%)
+    # Curva: Pollitos 30%, Jóvenes 60%, Adultos 100%
     factor = 0.3 if edad < 20 else (0.6 if edad < 45 else 1.0)
     return base * factor * cantidad
 
-def obtener_balance_pienso_real(gastos, lotes):
+def obtener_balance_pienso(gastos, lotes):
     total_comprado = gastos['ilos_pienso'].sum() if not gastos.empty else 0
-    consumo_historico = 0
+    consumo_acumulado = 0
     consumo_hoy = 0
-    
     if not lotes.empty:
         for _, r in lotes.iterrows():
             f_lote = datetime.strptime(r["fecha"], "%d/%m/%Y")
-            dias_en_corral = (datetime.now() - f_lote).days
-            # Sumamos lo que ha comido cada día desde que llegó
-            for d in range(dias_en_corral + 1):
-                edad_viva = r["edad_inicial"] + d
-                consumo_historico += calcular_consumo_dia_exacto(r['raza'], edad_viva, r['cantidad'])
-            # Consumo específico de hoy para la alerta
-            consumo_hoy += calcular_consumo_dia_exacto(r['raza'], r["edad_inicial"] + dias_en_corral, r['cantidad'])
-            
-    return max(0, total_comprado - consumo_historico), consumo_hoy
+            dias_vividos = (datetime.now() - f_lote).days
+            # Sumar consumo de cada día pasado
+            for d in range(dias_vividos + 1):
+                edad_d = r["edad_inicial"] + d
+                consumo_acumulado += calcular_consumo_especifico(r['raza'], edad_d, r['cantidad'])
+            # Consumo de hoy
+            consumo_hoy += calcular_consumo_especifico(r['raza'], r["edad_inicial"] + dias_vividos, r['cantidad'])
+    return max(0, total_comprado - consumo_acumulado), consumo_hoy
 
 # =================================================================
-# BLOQUE 3: INTERFAZ VISUAL
+# BLOQUE 3: VISTAS (TODO INTEGRADO)
 # =================================================================
+
 def vista_dashboard(prod, ventas, gastos, lotes):
-    st.title("🏠 Panel de Control Sincronizado")
-
-    # 1. CÁLCULOS DE DINERO
+    st.title("🏠 Dashboard Maestro")
+    
+    # Cálculos Financieros
     coste_animales = (lotes['cantidad'] * lotes['precio_ud']).sum() if not lotes.empty else 0
     otros_gastos = gastos['cantidad'].sum() if not gastos.empty else 0
     inv_total = coste_animales + otros_gastos
     
-    ingresos_ventas = ventas[ventas['tipo_venta']=='Venta Cliente']['cantidad'].sum() if not ventas.empty else 0
-    ahorro_casa = ventas[ventas['tipo_venta']=='Consumo Propio']['cantidad'].sum() if not ventas.empty else 0
-    beneficio = (ingresos_ventas + ahorro_casa) - inv_total
+    ingresos = ventas[ventas['tipo_venta']=='Venta Cliente']['cantidad'].sum() if not ventas.empty else 0
+    ahorro = ventas[ventas['tipo_venta']=='Consumo Propio']['cantidad'].sum() if not ventas.empty else 0
+    
+    # Cálculos Pienso
+    stock_real, c_hoy = obtener_balance_pienso(gastos, lotes)
+    dias_margen = stock_real / c_hoy if c_hoy > 0 else 0
 
-    # 2. CÁLCULOS DE PIENSO
-    stock_real, c_hoy = obtener_balance_pienso_real(gastos, lotes)
-    dias_stock = stock_real / c_hoy if c_hoy > 0 else 0
-
-    # MÉTRICAS
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("💸 Inversión Total", f"{inv_total:.2f} €", help="Lotes + Gastos manuales")
-    c2.metric("💰 Beneficio Real", f"{beneficio:.2f} €", delta=f"{ahorro_casa:.2f} € Ahorro")
-    c3.metric("🔋 Pienso Real", f"{stock_real:.1f} kg", help="Sacos menos consumo acumulado")
-    c4.metric("⏳ Autonomía", f"{int(dias_stock)} días")
-
-    if stock_real <= 0:
-        st.error("🚨 ALERTA: Sin existencias de pienso en el sistema. Registra una compra en 'Gastos'.")
+    c1.metric("💸 Inversión Total", f"{inv_total:.2f} €", help="Lotes + Gastos")
+    c2.metric("💰 Beneficio Neto", f"{(ingresos + ahorro) - inv_total:.2f} €")
+    c3.metric("🔋 Stock Pienso", f"{stock_real:.1f} kg")
+    c4.metric("⏳ Días Comida", f"{int(dias_margen)} d")
 
     st.divider()
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("📊 Distribución de Gastos")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("📊 Resumen Inversión")
         df_inv = pd.DataFrame({"Concepto": ["Animales", "Pienso/Otros"], "Euros": [coste_animales, otros_gastos]})
         st.bar_chart(df_inv.set_index("Concepto"))
-    with col_b:
-        st.subheader("📈 Producción de Huevos")
+    with col2:
+        st.subheader("📈 Tendencia Producción")
         if not prod.empty:
-            df_p = prod.tail(15).copy()
-            st.line_chart(df_p.set_index('fecha')['huevos'])
+            st.line_chart(prod.tail(10).set_index('fecha')['huevos'])
 
 def vista_crecimiento(lotes):
-    st.title("📈 IA Visual y Seguimiento")
+    st.title("📈 IA Visual y Fotos")
     for _, r in lotes.iterrows():
-        with st.expander(f"Lote {r['id']} - {r['raza']} (Ver detalles)"):
+        with st.expander(f"Lote {r['id']} - {r['raza']}"):
             f_l = datetime.strptime(r["fecha"], "%d/%m/%Y")
             edad = (datetime.now() - f_l).days + r["edad_inicial"]
-            st.info(f"📅 Edad actual: {edad} días. Recomendación: {CONFIG_IA.get(r['raza'], {}).get('cons_base', 0)*1000:.0f}g/ave.")
-            
+            st.write(f"📅 Edad: {edad} días | 💡 {CONFIG_IA.get(r['raza'], {}).get('consejo','')}")
             c1, c2 = st.columns(2)
-            with c1: cam = st.camera_input(f"Foto hoy {r['id']}", key=f"cam_{r['id']}")
-            with c2: sub = st.file_uploader("O subir archivo", type=['jpg','png'], key=f"sub_{r['id']}")
+            with c1: cam = st.camera_input(f"Captura {r['id']}", key=f"c_{r['id']}")
+            with c2: arch = st.file_uploader("Subir", type=['jpg','png'], key=f"f_{r['id']}")
             
-            final = cam if cam else sub
-            if final and st.button(f"Guardar Foto Lote {r['id']}", key=f"btn_{r['id']}"):
-                get_conn().execute("INSERT INTO fotos (lote_id, fecha, imagen) VALUES (?,?,?)", 
-                                   (r['id'], datetime.now().strftime("%d/%m/%Y"), final.read())).connection.commit()
-                st.success("¡Foto guardada!"); st.rerun()
+            final = cam if cam else arch
+            if final and st.button(f"Guardar Foto {r['id']}", key=f"b_{r['id']}"):
+                get_conn().execute("INSERT INTO fotos (lote_id, fecha, imagen) VALUES (?,?,?)", (r['id'], datetime.now().strftime("%d/%m/%Y"), final.read())).connection.commit(); st.rerun()
+            
+            df_fotos = cargar_tabla("fotos")
+            if not df_fotos.empty:
+                f_lote = df_fotos[df_fotos['lote_id'] == r['id']]
+                cols = st.columns(4)
+                for i, fr in f_lote.tail(4).iterrows(): cols[f_lote.tail(4).index.get_loc(i)].image(fr['imagen'], caption=fr['fecha'])
 
 # =================================================================
-# NAVEGACIÓN Y MENÚS
+# BLOQUE 4: MENÚS Y NAVEGACIÓN
 # =================================================================
 inicializar_db()
 lotes, ventas, prod, gastos = cargar_tabla("lotes"), cargar_tabla("ventas"), cargar_tabla("produccion"), cargar_tabla("gastos")
 
-menu = st.sidebar.radio("GESTIÓN:", ["🏠 Dashboard", "📈 Crecimiento", "🥚 Producción", "💰 Ventas", "💸 Gastos", "🎄 Navidad", "🐣 Alta Lotes", "📜 Histórico", "💾 Copias"])
+menu = st.sidebar.radio("MENÚ:", ["🏠 Dashboard", "📈 Crecimiento", "🥚 Producción", "💰 Ventas", "💸 Gastos", "🎄 Navidad", "🐣 Alta Lotes", "📜 Histórico", "💾 Copias"])
 
-if menu == "🏠 Dashboard": 
-    vista_dashboard(prod, ventas, gastos, lotes)
-
-elif menu == "📈 Crecimiento": 
-    vista_crecimiento(lotes)
-
+if menu == "🏠 Dashboard": vista_dashboard(prod, ventas, gastos, lotes)
+elif menu == "📈 Crecimiento": vista_crecimiento(lotes)
 elif menu == "🥚 Producción":
-    st.title("🥚 Registro de Puesta")
+    st.title("🥚 Producción")
     with st.form("p"):
         f = st.date_input("Fecha"); l = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
-        h = st.number_input("Cantidad de Huevos", 1)
+        h = st.number_input("Huevos", 1)
         if st.form_submit_button("Guardar"):
             get_conn().execute("INSERT INTO produccion (fecha, lote, huevos) VALUES (?,?,?)", (f.strftime("%d/%m/%Y"), l, h)).connection.commit(); st.rerun()
 
 elif menu == "💰 Ventas":
-    st.title("💰 Salida de Productos")
+    st.title("💰 Ventas y Salidas")
     with st.form("v"):
-        tipo = st.radio("Destino", ["Venta Cliente", "Consumo Propio"])
+        tipo = st.radio("Tipo", ["Venta Cliente", "Consumo Propio"])
         l = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
-        u = st.number_input("Unidades", 1); p = st.number_input("Euros (€)", 0.0)
+        u = st.number_input("Unidades (Huevos/Pollos)", 1)
+        k = st.number_input("Kg (para carne)", 0.0)
+        p = st.number_input("Precio Total €", 0.0)
         if st.form_submit_button("Registrar"):
-            get_conn().execute("INSERT INTO ventas (fecha, tipo_venta, cantidad, lote_id, unidades) VALUES (?,?,?,?,?)", 
-                               (datetime.now().strftime("%d/%m/%Y"), tipo, p, l, u)).connection.commit(); st.rerun()
+            get_conn().execute("INSERT INTO ventas (fecha, tipo_venta, cantidad, lote_id, unidades, ilos_finale) VALUES (?,?,?,?,?,?)", (datetime.now().strftime("%d/%m/%Y"), tipo, p, l, u, k)).connection.commit(); st.rerun()
 
 elif menu == "💸 Gastos":
-    st.title("💸 Compras y Gastos")
+    st.title("💸 Gastos")
     with st.form("g"):
-        cat = st.selectbox("Categoría", ["Pienso", "Medicina", "Infraestructura", "Otros"])
-        con = st.text_input("Concepto (ej: Saco 25kg Ponedoras)")
-        i = st.number_input("Importe (€)", 0.0)
-        kg = st.number_input("Kilos (solo si es Pienso)", 0.0)
-        if st.form_submit_button("Añadir Gasto"):
-            get_conn().execute("INSERT INTO gastos (fecha, categoria, concepto, cantidad, ilos_pienso) VALUES (?,?,?,?,?)", 
-                               (datetime.now().strftime("%d/%m/%Y"), cat, con, i, kg)).connection.commit(); st.rerun()
+        cat = st.selectbox("Categoría", ["Pienso", "Medicina", "Otros"])
+        con = st.text_input("Concepto"); i = st.number_input("Importe €", 0.0); kg = st.number_input("Kg Pienso", 0.0)
+        f_g = st.date_input("Fecha del Gasto")
+        if st.form_submit_button("Guardar"):
+            get_conn().execute("INSERT INTO gastos (fecha, categoria, concepto, cantidad, ilos_pienso) VALUES (?,?,?,?,?)", (f_g.strftime("%d/%m/%Y"), cat, con, i, kg)).connection.commit(); st.rerun()
 
 elif menu == "🎄 Navidad":
-    st.title("🎄 Planificador Navidad 2026")
+    st.title("🎄 Navidad 2026")
     for rz, info in CONFIG_IA.items():
         if "madurez" in info:
-            f_target = datetime(2026, 12, 20) - timedelta(days=info['madurez'])
-            st.warning(f"👉 Para tener **{rz}** listos en Navidad, debes comprarlos antes del: {f_target.strftime('%d/%m/%Y')}")
+            f_llegada = datetime(2026, 12, 20) - timedelta(days=info['madurez'])
+            st.info(f"📍 **{rz}**: Para Navidad, comprarlos el **{f_llegada.strftime('%d/%m/%Y')}**")
 
 elif menu == "🐣 Alta Lotes":
-    st.title("🐣 Entrada de Nuevos Animales")
+    st.title("🐣 Alta de Lote")
     with st.form("a"):
-        esp = st.selectbox("Especie", ["Gallinas", "Pollos"])
-        rz = st.selectbox("Raza", list(CONFIG_IA.keys()))
-        cant = st.number_input("Cantidad", 1); ed = st.number_input("Edad inicial (días)", 0)
-        pr = st.number_input("Precio por unidad (€)", 0.0)
-        f_ent = st.date_input("Fecha de llegada")
+        esp = st.selectbox("Especie", ["Gallinas", "Pollos"]); rz = st.selectbox("Raza", list(CONFIG_IA.keys()))
+        cant = st.number_input("Cantidad", 1); ed = st.number_input("Edad inicial", 0); pr = st.number_input("Precio ud €", 0.0)
+        f_a = st.date_input("Fecha de entrada")
         if st.form_submit_button("Dar de Alta"):
-            get_conn().execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, precio_ud, estado) VALUES (?,?,?,?,?,?,'Activo')", 
-                               (f_ent.strftime("%d/%m/%Y"), esp, rz, int(cant), int(ed), pr)).connection.commit(); st.rerun()
+            get_conn().execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, precio_ud, estado) VALUES (?,?,?,?,?,?,'Activo')", (f_a.strftime("%d/%m/%Y"), esp, rz, int(cant), int(ed), pr)).connection.commit(); st.rerun()
 
 elif menu == "📜 Histórico":
-    st.title("📜 Histórico de Datos")
-    t = st.selectbox("Seleccionar Tabla", ["lotes", "gastos", "produccion", "ventas", "fotos"])
-    df = cargar_tabla(t)
-    st.write(f"Mostrando {len(df)} registros:")
-    st.dataframe(df, use_container_width=True)
-    idx = st.number_input("ID del registro a eliminar", 0)
-    if st.button("Eliminar Permanentemente"):
-        get_conn().execute(f"DELETE FROM {t} WHERE id={idx}").connection.commit(); st.rerun()
+    t = st.selectbox("Tabla", ["lotes", "gastos", "produccion", "ventas", "fotos"])
+    df = cargar_tabla(t); st.dataframe(df)
+    idx = st.number_input("ID a borrar", 0)
+    if st.button("Eliminar"): get_conn().execute(f"DELETE FROM {t} WHERE id={idx}").connection.commit(); st.rerun()
 
 elif menu == "💾 Copias":
-    st.title("💾 Gestión de Seguridad")
-    if st.button("📥 Descargar todo en Excel"):
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            for t in ["lotes", "gastos", "produccion", "ventas"]: cargar_tabla(t).to_excel(writer, sheet_name=t, index=False)
-        st.download_button("Guardar archivo", output.getvalue(), "Backup_Corral_IA.xlsx")
+    st.title("💾 Copias y Excel")
+    if st.button("📥 Descargar Excel"):
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine='openpyxl') as w:
+            for t in ["lotes", "gastos", "produccion", "ventas"]: cargar_tabla(t).to_excel(w, sheet_name=t, index=False)
+        st.download_button("Guardar archivo", out.getvalue(), "Backup_Corral.xlsx")
     
-    subida = st.file_uploader("Restaurar desde Excel", type="xlsx")
-    if subida and st.button("🚀 Restaurar Sistema"):
-        data = pd.read_excel(subida, sheet_name=None)
+    sub = st.file_uploader("Subir Backup", type="xlsx")
+    if sub and st.button("🚀 Restaurar"):
+        data = pd.read_excel(sub, sheet_name=None)
         conn = get_conn()
         for t in ["lotes", "gastos", "produccion", "ventas"]:
-            if t in data:
-                conn.execute(f"DELETE FROM {t}")
-                data[t].to_sql(t, conn, if_exists='append', index=False)
-        conn.commit(); st.success("Sistema restaurado con éxito."); st.rerun()
+            if t in data: conn.execute(f"DELETE FROM {t}"); data[t].to_sql(t, conn, if_exists='append', index=False)
+        conn.commit(); st.success("¡Restaurado!"); st.rerun()

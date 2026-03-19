@@ -8,7 +8,7 @@ import io
 # =================================================================
 # BLOQUE 1: MOTOR DE DATOS
 # =================================================================
-st.set_page_config(page_title="CORRAL IA V31.0", layout="wide", page_icon="🚜")
+st.set_page_config(page_title="CORRAL IA V32.0", layout="wide", page_icon="🚜")
 DB_PATH = "corral_maestro_pro.db"
 
 def get_conn():
@@ -56,7 +56,7 @@ def obtener_consejo(seccion):
     st.info(dict_c.get(seccion, "Gestión optimizada por IA."))
 
 # =================================================================
-# BLOQUE 3: VISTAS MODULARES (SECCIONES)
+# BLOQUE 3: VISTAS MODULARES (SECCIONES) - MODIFICADO CRECIMIENTO
 # =================================================================
 
 def vista_dashboard(prod, ventas, gastos):
@@ -79,12 +79,38 @@ def vista_crecimiento(lotes):
             edad = (datetime.now() - f_lote).days + r["edad_inicial"]
             st.write(f"📅 Edad: {edad} días. | {CONFIG_IA.get(r['raza'], {}).get('consejo', '')}")
             
-            # Foto
-            img = st.camera_input(f"Capturar Lote {r['id']}", key=f"cam_{r['id']}")
-            if img and st.button(f"Guardar Foto {r['id']}", key=f"btn_{r['id']}"):
+            # --- SECCIÓN DE CAPTURA VISUAL ---
+            c1, c2 = st.columns(2)
+            with c1:
+                # Opción 1: Captura directa con cámara (móvil o PC)
+                img_cam = st.camera_input(f"Capturar Lote {r['id']}", key=f"cam_{r['id']}")
+            
+            with c2:
+                # Opción 2: Subir archivo existente (para tus fotos del 04/03/2026)
+                img_file = st.file_uploader(f"O subir foto del historial (Lote {r['id']})", type=['jpg','png','jpeg'], key=f"file_{r['id']}")
+                f_foto = st.date_input(f"Fecha de la foto", datetime.now(), key=f"date_{r['id']}")
+
+            # Procesamiento de la imagen (venga de donde venga)
+            img_to_save = None
+            if img_cam: img_to_save = img_cam
+            elif img_file: img_to_save = img_file
+            
+            if img_to_save and st.button(f"Guardar Foto {r['id']}", key=f"btn_{r['id']}"):
                 get_conn().execute("INSERT INTO fotos (lote_id, fecha, imagen) VALUES (?,?,?)", 
-                                   (r['id'], datetime.now().strftime("%d/%m/%Y"), img.read())).connection.commit()
-                st.success("Foto guardada."); st.rerun()
+                                   (r['id'], f_foto.strftime("%d/%m/%Y"), img_to_save.read())).connection.commit()
+                st.success("Foto guardada en el historial visual."); st.rerun()
+
+            # --- VISUALIZACIÓN DEL HISTORIAL (Para confirmar la subida) ---
+            st.divider()
+            df_fotos = cargar_tabla("fotos")
+            if not df_fotos.empty:
+                fotos_lote = df_fotos[df_fotos['lote_id'] == r['id']]
+                if not fotos_lote.empty:
+                    st.write("Historial visual reciente:")
+                    cols_fotos = st.columns(4)
+                    for i, f_data in fotos_lote.tail(4).iterrows():
+                        with cols_fotos[fotos_lote.tail(4).index.get_loc(i)]:
+                            st.image(f_data['imagen'], caption=f_data['fecha'], use_container_width=True)
 
 def vista_produccion(lotes):
     st.title("🥚 Producción")
@@ -136,7 +162,7 @@ def vista_alta(lotes):
         f = st.date_input("Fecha")
         if st.form_submit_button("Dar de Alta"):
             get_conn().execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, precio_ud, estado) VALUES (?,?,?,?,?,?,'Activo')", 
-                               (f.strftime("%d/%m/%Y"), esp, rz, int(cant), int(ed), pr)).connection.commit(); st.rerun()
+                               (f.strftime("%d/%m/%Y"), esp, rz, int(cant), int( ed), pr)).connection.commit(); st.rerun()
 
 def vista_copias():
     st.title("💾 Copias y Restauración")

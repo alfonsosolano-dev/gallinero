@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import io
 
 # ====================== 1. CONFIGURACIÓN Y BASE DE DATOS ======================
-st.set_page_config(page_title="CORRAL IA ELITE V18.2", layout="wide", page_icon="🤖")
+st.set_page_config(page_title="CORRAL IA ELITE V18.3", layout="wide", page_icon="🤖")
 DB_PATH = "corral_maestro_pro.db"
 
 def get_conn():
@@ -22,14 +22,11 @@ def inicializar_y_migrar_db():
     c.execute("CREATE TABLE IF NOT EXISTS bajas(id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, cantidad INTEGER, motivo TEXT, perdida_estimada REAL)")
     c.execute("CREATE TABLE IF NOT EXISTS hitos(id INTEGER PRIMARY KEY AUTOINCREMENT, lote_id INTEGER, tipo TEXT, fecha TEXT)")
     
-    # Parche de migración para columnas nuevas
-    columnas_ventas = [col[1] for col in c.execute("PRAGMA table_info(ventas)")]
-    if "unidades" not in columnas_ventas:
-        c.execute("ALTER TABLE ventas ADD COLUMN unidades INTEGER DEFAULT 1")
-    if "kilos_finales" not in columnas_ventas:
-        c.execute("ALTER TABLE ventas ADD COLUMN kilos_finales REAL DEFAULT 0")
-    conn.commit()
-    conn.close()
+    # Verificación de columnas (Migración en vivo)
+    cols_v = [col[1] for col in c.execute("PRAGMA table_info(ventas)")]
+    if "unidades" not in cols_v: c.execute("ALTER TABLE ventas ADD COLUMN unidades INTEGER DEFAULT 1")
+    if "kilos_finales" not in cols_v: c.execute("ALTER TABLE ventas ADD COLUMN kilos_finales REAL DEFAULT 0")
+    conn.commit(); conn.close()
 
 def cargar(tabla):
     conn = get_conn()
@@ -66,14 +63,13 @@ def calc_stock(cat, esp):
     if not lotes.empty:
         for _, r in lotes[lotes['especie'] == esp].iterrows():
             vivas = max(0, r['cantidad'] - (bajas[bajas['lote'] == r['id']]['cantidad'].sum() if not bajas.empty else 0))
-            dias = (datetime.now() - datetime.strptime(r["fecha"], "%d/%m/%Y")).days
-            for d in range(dias + 1):
+            d_v = (datetime.now() - datetime.strptime(r["fecha"], "%d/%m/%Y")).days
+            for d in range(d_v + 1):
                 cons_tot += vivas * obtener_consumo_diario(r["raza"], r["edad_inicial"] + d)
     return max(0, kg_c - cons_tot)
 
 # ====================== 3. INTERFAZ ======================
-st.sidebar.title("🤖 CORRAL IA ELITE V18.2")
-seccion = st.sidebar.radio("MENÚ:", [
+seccion = st.sidebar.radio("MENÚ IA:", [
     "🏠 Dashboard", "📈 IA Crecimiento", "🥚 Producción", "🌟 Primera Puesta",
     "💰 Ventas", "🎄 IA Navidad", "🐣 Alta Lotes", "💸 Gastos", "💀 Bajas", 
     "📜 Histórico", "💾 EXPORTAR/SEGURIDAD"
@@ -81,18 +77,13 @@ seccion = st.sidebar.radio("MENÚ:", [
 
 if seccion == "🏠 Dashboard":
     st.title("🏠 Dashboard")
-    s_gal = calc_stock("Pienso Gallinas", "Gallinas")
-    s_pol = calc_stock("Pienso Pollos", "Pollos")
-    s_cod = calc_stock("Pienso Codornices", "Codornices")
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Pienso Gallinas", f"{s_gal:.1f} kg")
-    c2.metric("Pienso Pollos", f"{s_pol:.1f} kg")
-    c3.metric("Pienso Codornices", f"{s_cod:.1f} kg")
-    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Pienso Gallinas", f"{calc_stock('Pienso Gallinas', 'Gallinas'):.1f} kg")
+    col2.metric("Pienso Pollos", f"{calc_stock('Pienso Pollos', 'Pollos'):.1f} kg")
+    col3.metric("Pienso Codornices", f"{calc_stock('Pienso Codornices', 'Codornices'):.1f} kg")
     if not produccion.empty:
-        st.subheader("📊 Producción Reciente")
-        st.line_chart(produccion.tail(15).set_index('fecha')['huevos'])
+        st.subheader("📊 Producción (Últimos 15 días)")
+        st.bar_chart(produccion.tail(15).set_index('fecha')['huevos'])
 
 elif seccion == "📈 IA Crecimiento":
     st.title("📈 IA de Crecimiento")
@@ -101,101 +92,88 @@ elif seccion == "📈 IA Crecimiento":
         info = DICC_IA.get(r["raza"], {"puesta_dias": 150, "madurez_dias": 90})
         meta = info.get("puesta_dias") if "puesta_dias" in info else info.get("madurez_dias")
         porc = min(100, int((edad/meta)*100))
-        
         ya_pone = "🥚" if not hitos[(hitos['lote_id']==r['id']) & (hitos['tipo']=='Primera Puesta')].empty else ""
         st.write(f"**Lote {r['id']} - {r['raza']}** {ya_pone} ({edad} días)")
         st.progress(porc/100)
         if porc < 100:
             f_est = datetime.now() + timedelta(days=meta-edad)
             st.warning(f"IA estima madurez el: {f_est.strftime('%d/%m/%Y')} (Faltan {meta-edad} días)")
-        else: st.success("Lote en fase de producción/sacrificio")
 
 elif seccion == "🥚 Producción":
-    st.title("🥚 Producción Diaria")
-    with st.form("f_p"):
+    st.title("🥚 Producción")
+    with st.form("p"):
         f = st.date_input("Fecha"); l_id = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
         cant = st.number_input("Huevos", 1)
         if st.form_submit_button("Guardar"):
             get_conn().execute("INSERT INTO produccion (fecha, lote, huevos) VALUES (?,?,?)", (f.strftime("%d/%m/%Y"), l_id, cant)).connection.commit(); st.rerun()
 
 elif seccion == "🌟 Primera Puesta":
-    st.title("🌟 Registro de Hito: Primer Huevo")
-    with st.form("f_h"):
+    st.title("🌟 Hito: Primera Puesta")
+    with st.form("h"):
         l_id = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
         f_h = st.date_input("Fecha")
-        if st.form_submit_button("Registrar Primera Puesta"):
+        if st.form_submit_button("Registrar"):
             get_conn().execute("INSERT INTO hitos (lote_id, tipo, fecha) VALUES (?, 'Primera Puesta', ?)", (int(l_id), f_h.strftime("%d/%m/%Y"))).connection.commit(); st.rerun()
 
 elif seccion == "💰 Ventas":
-    st.title("💰 Ventas y Margen Real")
-    with st.form("f_v"):
+    st.title("💰 Ventas (Unidades y Peso)")
+    with st.form("v"):
         f = st.date_input("Fecha"); l_id = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
         c1, c2, c3 = st.columns(3)
-        uds = c1.number_input("Unidades", 1); kgs = c2.number_input("Kilos Totales", 0.0); pr = c3.number_input("Precio Total €", 0.0)
+        uds = c1.number_input("Unidades", 1); kgs = c2.number_input("Kilos", 0.0); pr = c3.number_input("Precio €", 0.0)
         cli = st.text_input("Cliente"); conc = st.text_input("Concepto")
-        if st.form_submit_button("Registrar Venta"):
+        if st.form_submit_button("Guardar Venta"):
             get_conn().execute("INSERT INTO ventas (fecha, cliente, tipo_venta, concepto, cantidad, lote_id, kilos_finales, unidades) VALUES (?,?,'Venta Cliente',?,?,?,?,?)", 
                                (f.strftime("%d/%m/%Y"), cli, conc, pr, int(l_id), kgs, uds)).connection.commit(); st.rerun()
-    if not ventas.empty:
-        st.subheader("Análisis de Beneficio")
-        df_v = ventas.copy()
-        l_precios = lotes.set_index('id')['precio_ud'].to_dict()
-        df_v['coste_compra'] = df_v['lote_id'].map(l_precios) * df_v['unidades']
-        df_v['beneficio'] = df_v['cantidad'] - df_v['coste_compra']
-        st.dataframe(df_v[['fecha', 'concepto', 'unidades', 'kilos_finales', 'cantidad', 'beneficio']], use_container_width=True)
 
 elif seccion == "🎄 IA Navidad":
-    st.title("🎄 Planificador IA Navidad")
+    st.title("🎄 Planificador Navidad")
     f_obj = datetime(datetime.now().year, 12, 20)
-    for raza in ["Blanco Engorde", "Campero"]:
-        info = DICC_IA[raza]
-        f_compra = f_obj - timedelta(days=info['madurez_dias'])
-        cons_total = info['madurez_dias'] * info['cons_adulto'] * 0.8
-        st.info(f"**{raza}**: Compra el **{f_compra.strftime('%d/%m')}**. Consumo est: {cons_total:.2f} kg/ave.")
+    for r in ["Blanco Engorde", "Campero"]:
+        info = DICC_IA[r]; f_c = f_obj - timedelta(days=info['madurez_dias'])
+        st.info(f"**{r}**: Comprar el {f_c.strftime('%d/%m')}. Consumo medio: {info['madurez_dias']*info['cons_adulto']*0.7:.1f} kg/ave.")
 
 elif seccion == "🐣 Alta Lotes":
-    st.title("🐣 Alta de Lotes")
-    with st.form("f_a"):
+    st.title("🐣 Alta Lotes")
+    with st.form("a"):
         esp = st.selectbox("Especie", ["Gallinas", "Pollos", "Codornices"])
         rz = st.selectbox("Raza", list(DICC_IA.keys()))
         c1, c2, c3 = st.columns(3)
         cant = c1.number_input("Cant", 1); ed = c2.number_input("Edad inicial", 0); pr = c3.number_input("Precio Ud", 0.0)
         f = st.date_input("Fecha")
-        if st.form_submit_button("Guardar"):
+        if st.form_submit_button("Registrar"):
             get_conn().execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, precio_ud, estado) VALUES (?,?,?,?,?,?,'Activo')", (f.strftime("%d/%m/%Y"), esp, rz, int(cant), int(ed), pr)).connection.commit(); st.rerun()
 
-elif seccion == "💀 Bajas":
-    st.title("💀 Bajas")
-    with st.form("f_b"):
-        l_id = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
-        cant = st.number_input("Cantidad", 1); mot = st.text_input("Motivo")
-        if st.form_submit_button("Registrar Baja"):
-            l_sel = lotes[lotes['id']==l_id].iloc[0]
-            perd = cant * l_sel['precio_ud']
-            get_conn().execute("INSERT INTO bajas (fecha, lote, cantidad, motivo, perdida_estimada) VALUES (?,?,?,?,?)", (datetime.now().strftime("%d/%m/%Y"), int(l_id), int(cant), mot, perd)).connection.commit(); st.rerun()
+elif seccion == "💸 Gastos":
+    st.title("💸 Gastos")
+    with st.form("g"):
+        f = st.date_input("Fecha"); cat = st.selectbox("Cat", ["Pienso Gallinas", "Pienso Pollos", "Pienso Codornices", "Otros"])
+        con = st.text_input("Concepto"); imp = st.number_input("€", 0.0); kg = st.number_input("Kg", 0.0)
+        if st.form_submit_button("Guardar"):
+            get_conn().execute("INSERT INTO gastos (fecha, categoria, concepto, cantidad, kilos_pienso) VALUES (?,?,?,?,?)", (f.strftime("%d/%m/%Y"), cat, con, imp, kg)).connection.commit(); st.rerun()
 
 elif seccion == "📜 Histórico":
-    st.title("📜 Histórico General")
+    st.title("📜 Histórico")
     t = st.selectbox("Tabla", ["lotes", "gastos", "produccion", "ventas", "bajas", "hitos"])
     df = cargar(t)
     st.dataframe(df, use_container_width=True)
     if not df.empty:
-        id_del = st.number_input("ID a eliminar", 0)
-        if st.button("Eliminar Registro"):
+        id_del = st.number_input("Eliminar ID", 0)
+        if st.button("Borrar Registro"):
             get_conn().execute(f"DELETE FROM {t} WHERE id=?", (id_del,)).connection.commit(); st.rerun()
 
 elif seccion == "💾 EXPORTAR/SEGURIDAD":
-    st.title("💾 Exportación y Seguridad")
+    st.title("💾 Exportar")
     try:
         import xlsxwriter
-        if st.button("📊 EXPORTAR TODO A EXCEL"):
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        if st.button("📊 Exportar Excel"):
+            out = io.BytesIO()
+            with pd.ExcelWriter(out, engine='xlsxwriter') as wr:
                 for t in ["lotes", "gastos", "produccion", "ventas", "bajas", "hitos"]:
-                    cargar(t).to_excel(writer, sheet_name=t, index=False)
-            st.download_button("📥 Descargar Archivo", output.getvalue(), "corral_completo.xlsx")
-    except ImportError:
-        st.warning("Instala 'xlsxwriter' para descargar Excel. Mientras tanto, usa la base de datos:")
+                    cargar(t).to_excel(wr, sheet_name=t, index=False)
+            st.download_button("📥 Descargar Excel", out.getvalue(), "corral.xlsx")
+    except:
+        st.error("⚠️ Falta 'xlsxwriter'. Sube el requirements.txt a GitHub.")
     
     if os.path.exists(DB_PATH):
-        with open(DB_PATH, "rb") as f: st.download_button("📥 Descargar Base de Datos (.db)", f, "corral.db")
+        with open(DB_PATH, "rb") as f: st.download_button("📥 Descargar DB (.db)", f, "corral.db")

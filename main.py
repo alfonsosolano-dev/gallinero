@@ -59,34 +59,69 @@ def calcular_consumo_diario(raza, edad, cantidad):
 def vista_dashboard(prod, ventas, gastos, lotes):
     st.title("🏠 Panel de Control Maestro")
     
-    # Alerta de Stock Protegida
-    total_pienso = 0
-    if not gastos.empty and 'ilos_pienso' in gastos.columns:
-        total_pienso = gastos['ilos_pienso'].sum()
-    
-    if total_pienso < 10:
-        st.error(f"⚠️ Alerta Stock Pienso: {total_pienso:.1f} kg (Comprar pronto)")
+    # --- CÁLCULOS DE DATOS ---
+    # 1. Stock de Huevos
+    total_producido = prod['huevos'].sum() if not prod.empty else 0
+    total_salidas = ventas['unidades'].sum() if not ventas.empty else 0
+    stock_huevos = total_producido - total_salidas
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Huevos", f"{int(prod['huevos'].sum()) if not prod.empty else 0}")
+    # 2. Finanzas: Ventas vs Consumo Propio
+    venta_cliente = ventas[ventas['tipo_venta']=='Venta Cliente']['cantidad'].sum() if not ventas.empty else 0
+    ahorro_propio = ventas[ventas['tipo_venta']=='Consumo Propio']['cantidad'].sum() if not ventas.empty else 0
+    caja_total = venta_cliente + ahorro_propio
+    inversion = gastos['cantidad'].sum() if not gastos.empty else 0
+
+    # 3. Alerta de Stock de Pienso
+    total_pienso_comprado = gastos['ilos_pienso'].sum() if not gastos.empty else 0
+    # (Nota: Aquí podríamos restar el consumo histórico para un stock real)
     
-    ingresos = ventas[ventas['tipo_venta']=='Venta Cliente']['cantidad'].sum() if not ventas.empty else 0
-    c2.metric("Caja Real", f"{ingresos:.2f} €")
-    
-    consumo_hoy = 0
+    # --- INTERFAZ DE MÉTRICAS ---
+    if total_pienso_comprado < 10:
+        st.error(f"⚠️ ¡STOCK CRÍTICO DE PIENSO! Solo quedan {total_pienso_comprado:.1f} kg en historial.")
+
+    # Fila 1: Huevos y Pienso
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🥚 Stock Huevos", f"{int(stock_huevos)} ud", help="Producción total menos ventas y consumo")
+    c2.metric("📦 Pienso en Almacén", f"{total_pienso_comprado:.1f} kg", delta="-2.5 kg est./día", delta_color="inverse")
+    c3.metric("💸 Inversión Total", f"{inversion:.2f} €")
+
+    st.divider()
+
+    # Fila 2: Dinero y Rentabilidad
+    c4, c5, c6 = st.columns(3)
+    c4.metric("💰 Caja (Ventas)", f"{venta_cliente:.2f} €", help="Dinero real ingresado por clientes")
+    c5.metric("🏠 Ahorro Casa", f"{ahorro_propio:.2f} €", help="Dinero que has dejado de gastar en el súper")
+    c6.metric("🚀 Valor Generado", f"{caja_total:.2f} €", delta=f"{caja_total - inversion:.2f} € Netos")
+
+    st.divider()
+
+    # --- DESGLOSE DE CONSUMO POR ESPECIE ---
+    st.subheader("📊 Consumo de Pienso Estimado (Hoy)")
     if not lotes.empty:
+        datos_consumo = []
         for _, r in lotes.iterrows():
-            try:
-                f_lote = datetime.strptime(r["fecha"], "%d/%m/%Y")
-                edad = (datetime.now() - f_lote).days + r["edad_inicial"]
-                consumo_hoy += calcular_consumo_diario(r['raza'], edad, r['cantidad'])
-            except: pass
-    c3.metric("Consumo Hoy", f"{consumo_hoy:.2f} kg")
-    c4.metric("Inversión", f"{gastos['cantidad'].sum() if not gastos.empty else 0:.2f} €")
-    
+            f_lote = datetime.strptime(r["fecha"], "%d/%m/%Y")
+            edad = (datetime.now() - f_lote).days + r["edad_inicial"]
+            cons_individual = calcular_consumo_diario(r['raza'], edad, 1)
+            cons_total_lote = cons_individual * r['cantidad']
+            
+            datos_consumo.append({
+                "Lote": f"ID {r['id']} - {r['raza']}",
+                "Especie": r['especie'],
+                "Edad": f"{edad} días",
+                "Consumo/Día (Kg)": round(cons_total_lote, 3)
+            })
+        
+        df_cons = pd.DataFrame(datos_consumo)
+        st.table(df_cons)
+        st.info(f"💡 Consumo Total del Corral: **{df_cons['Consumo/Día (Kg)'].sum():.2f} kg/día**")
+    else:
+        st.info("No hay lotes activos para calcular consumos.")
+
+    # Gráfico de producción
     if not prod.empty:
-        st.subheader("📈 Histórico de Puesta")
-        st.line_chart(prod.tail(20).set_index('fecha')['huevos'])
+        st.subheader("📈 Evolución de la Puesta")
+        st.line_chart(prod.tail(15).set_index('fecha')['huevos'])
 
 def vista_crecimiento(lotes):
     st.title("📈 Seguimiento de Crecimiento")

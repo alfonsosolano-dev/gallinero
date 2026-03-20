@@ -5,3 +5,4 @@ google-generativeai
 plotly
 openpyxl
 requests
+scikit-learn

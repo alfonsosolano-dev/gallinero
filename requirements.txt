@@ -2,7 +2,7 @@ streamlit
 pandas
 numpy
 google-generativeai
-plotly
-openpyxl
-requests
 scikit-learn
+plotly
+requests
+openpyxl

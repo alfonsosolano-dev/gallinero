@@ -9,11 +9,11 @@ import plotly.graph_objects as go
 import google.generativeai as genai
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="CORRAL OMNI V85", layout="wide", page_icon="🚜")
+st.set_page_config(page_title="CORRAL OMNI V84 - INDUSTRIAL", layout="wide", page_icon="🚜")
 
 DB_PATH = "corral_maestro_pro.db"
 
-# --- 1. DICCIONARIOS Y CURVAS ---
+# --- 1. DICCIONARIOS MAESTROS ---
 ESPECIES_FULL = {
     "Gallina": ["Roja (Lohman)", "Blanca (Leghorn)", "Huevo Verde", "Huevo Azul", "Negra", "Extremeña", "Pita Pinta", "Ayam Cemani"],
     "Pollo (Carne)": ["Blanco Engorde (Broiler)", "Campero / Rural", "Crecimiento Lento", "Capón"],
@@ -22,37 +22,31 @@ ESPECIES_FULL = {
     "Pato": ["Mulard", "Pekín", "Corredor Indio"]
 }
 
+# Curvas Biológicas
 CURVA_PUESTA = {"sem": [0,18,20,25,30,40,50,60,70,80,90], "p": [0,0,0.15,0.85,0.94,0.92,0.88,0.80,0.70,0.60,0.40]}
-CURVA_CRECIMIENTO = {"sem": [0,1,2,3,4,5,6,7,8,12,16], "kg": [0.05,0.18,0.45,0.9,1.5,2.2,2.9,3.5,4.0,5.5,7.0]}
+CURVA_PESO = {"sem": [0,1,2,3,4,5,6,7,8,12,16], "kg": [0.05, 0.18, 0.45, 0.9, 1.5, 2.2, 2.9, 3.5, 4.0, 5.5, 7.0]}
+# Consumo diario estimado por kg de peso vivo (aprox 10% del peso en pollos jóvenes, bajando al 5% en adultos)
+FACTOR_PIENSO_CARNE = 0.08 
 
-# --- 2. BASE DE DATOS ---
+# --- 2. MOTOR DE BASE DE DATOS ---
 def get_conn(): return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def inicializar_db():
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("""CREATE TABLE IF NOT EXISTS lotes (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, cantidad INTEGER,
-                        edad_inicial_semanas INTEGER, precio_ud REAL, estado TEXT)""")
-        c.execute("""CREATE TABLE IF NOT EXISTS produccion (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, huevos INTEGER)""")
-        c.execute("""CREATE TABLE IF NOT EXISTS gastos (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, categoria TEXT, concepto TEXT, cantidad REAL, ilos_pienso REAL)""")
-        c.execute("""CREATE TABLE IF NOT EXISTS ventas (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, tipo_venta TEXT, cantidad REAL, unidades INTEGER)""")
-        c.execute("""CREATE TABLE IF NOT EXISTS bajas (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote_id INTEGER, cantidad INTEGER)""")
-        c.execute("""CREATE TABLE IF NOT EXISTS fotos (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT, lote_id INTEGER, fecha TEXT, imagen BLOB, nota TEXT)""")
+        c.execute("CREATE TABLE IF NOT EXISTS lotes (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, cantidad INTEGER, edad_inicial_semanas INTEGER, precio_ud REAL, estado TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS produccion (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, huevos INTEGER)")
+        c.execute("CREATE TABLE IF NOT EXISTS gastos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, categoria TEXT, concepto TEXT, cantidad REAL, kilos_pienso REAL)")
+        c.execute("CREATE TABLE IF NOT EXISTS ventas (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, tipo_venta TEXT, cantidad REAL, unidades INTEGER, kg_vendidos REAL)")
+        c.execute("CREATE TABLE IF NOT EXISTS bajas (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote_id INTEGER, cantidad INTEGER, motivo TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS fotos (id INTEGER PRIMARY KEY AUTOINCREMENT, lote_id INTEGER, fecha TEXT, imagen BLOB, nota TEXT)")
     conn.commit()
 
-def cargar(tabla):
-    try:
-        return pd.read_sql(f"SELECT * FROM {tabla}", get_conn())
-    except:
-        return pd.DataFrame()
+def cargar(t):
+    try: return pd.read_sql(f"SELECT * FROM {t}", get_conn())
+    except: return pd.DataFrame()
 
-# --- 3. CLIMA Y PREDICCIÓN ---
+# --- 3. CEREBRO DE CÁLCULO (CARNE & PIENSO) ---
 def get_clima(key):
     if not key: return 22.0
     try:
@@ -60,162 +54,153 @@ def get_clima(key):
         r = requests.get(url, timeout=5).json()
         datos = requests.get(r["datos"], timeout=5).json()
         return float(datos[-1]["ta"])
-    except:
-        return 22.0
+    except: return 22.0
 
-def predecir_rendimiento(lote, bajas, dias_plus):
-    try:
-        f_alta = datetime.strptime(lote["fecha"], "%d/%m/%Y" if "/" in lote["fecha"] else "%Y-%m-%d")
-        edad_total_sem = lote["edad_inicial_semanas"] + ((datetime.now() - f_alta).days + dias_plus)/7
-        muertes = bajas[bajas['lote_id']==lote['id']]['cantidad'].sum() if not bajas.empty else 0
-        vivos = max(0, lote['cantidad'] - muertes)
-        if "Gallina" in lote["especie"] or "Codorniz" in lote["especie"]:
-            val = np.interp(edad_total_sem, CURVA_PUESTA["sem"], CURVA_PUESTA["p"]) * vivos
-            return ("H", val)
-        else:
-            val = np.interp(edad_total_sem, CURVA_CRECIMIENTO["sem"], CURVA_CRECIMIENTO["kg"]) * vivos
-            return ("C", val)
-    except:
-        return (None, 0)
+def calcular_estado_actual(lotes, bajas, gastos, temp):
+    stock_pienso = gastos['kilos_pienso'].sum() if not gastos.empty else 0
+    consumo_total_acumulado = 0
+    peso_vivo_total = 0
+    
+    for _, l in lotes.iterrows():
+        f_ini = datetime.strptime(l["fecha"], "%d/%m/%Y" if "/" in l["fecha"] else "%Y-%m-%d")
+        dias_vida = (datetime.now() - f_ini).days
+        muertes = bajas[bajas['lote_id']==l['id']]['cantidad'].sum() if not bajas.empty else 0
+        vivos = max(0, l['cantidad'] - muertes)
+        
+        # Calcular consumo acumulado desde el primer día
+        for d in range(dias_vida + 1):
+            edad_sem = l['edad_inicial_semanas'] + (d/7)
+            if "Gallina" in l['especie']:
+                base = 0.115 # 115g fijos para ponedora
+            else:
+                peso_d = np.interp(edad_sem, CURVA_PESO["sem"], CURVA_PESO["kg"])
+                base = peso_d * FACTOR_PIENSO_CARNE
+            
+            # Ajuste Clima
+            if temp > 30: base *= 1.10
+            consumo_total_acumulado += base * vivos
+            
+        # Peso actual para el Dashboard
+        edad_hoy = l['edad_inicial_semanas'] + (dias_vida/7)
+        if "Pollo" in l['especie'] or "Pavo" in l['especie']:
+            peso_vivo_total += np.interp(edad_hoy, CURVA_PESO["sem"], CURVA_PESO["kg"]) * vivos
+            
+    return max(0, stock_pienso - consumo_total_acumulado), peso_vivo_total
 
-def analizar_ia(blob, especie, key):
-    if not key: return "⚠️ Falta API Key de Gemini."
-    try:
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        res = model.generate_content([f"Analiza salud, plumaje y posibles enfermedades del lote: {especie}",
-                                      {"mime_type":"image/jpeg","data":blob}])
-        return res.text
-    except Exception as e:
-        return f"❌ Error IA: {str(e)}"
-
-# --- 4. INTERFAZ ---
+# =========================================================
+# INTERFAZ DE USUARIO
+# =========================================================
 inicializar_db()
 if 'gemini_key' not in st.session_state: st.session_state['gemini_key'] = ""
 if 'aemet_key' not in st.session_state: st.session_state['aemet_key'] = ""
 
-lotes = cargar("lotes")
-produccion = cargar("produccion")
-gastos = cargar("gastos")
-ventas = cargar("ventas")
-bajas = cargar("bajas")
-fotos = cargar("fotos")
+lotes, gastos, produccion, bajas, ventas = cargar("lotes"), cargar("gastos"), cargar("produccion"), cargar("bajas"), cargar("ventas")
 temp = get_clima(st.session_state['aemet_key'])
 
-st.sidebar.title("🚜 CORRAL OMNI V85")
-menu = st.sidebar.radio("MENÚ", ["📊 Dashboard", "🔮 Predicción & Crecimiento", "🐣 Alta de Lotes", "🥚 Producción",
-                                 "💰 Ventas/Gastos", "🩺 Salud IA", "📜 Histórico"])
+st.sidebar.title("🚜 CORRAL OMNI V84")
+menu = st.sidebar.radio("MENÚ", ["📊 Dashboard", "🔮 Predicción Pro", "🐣 Alta Lotes", "🥚 Producción", "💰 Ventas/Gastos", "🩺 Salud IA", "📜 Histórico"])
 
-with st.sidebar.expander("🔑 API Keys"):
-    st.session_state['gemini_key'] = st.text_input("Gemini Key", type="password", value=st.session_state['gemini_key'])
-    st.session_state['aemet_key'] = st.text_input("AEMET Key", type="password", value=st.session_state['aemet_key'])
-
-# ---------------- DASHBOARD AUTOMÁTICO ----------------
-if menu=="📊 Dashboard":
-    st.title("📊 Dashboard Inteligente")
-    balance = ventas['cantidad'].sum() - gastos['cantidad'].sum()
-    aves_activas = int(lotes['cantidad'].sum() - bajas['cantidad'].sum() if not lotes.empty else 0)
-    prod_hoy = int(produccion[produccion['fecha']==datetime.now().strftime("%d/%m/%Y")]['huevos'].sum() if not produccion.empty else 0)
-
+# --- DASHBOARD ---
+if menu == "📊 Dashboard":
+    st.title("📊 Panel Industrial")
+    pienso_real, peso_total = calcular_estado_actual(lotes, bajas, gastos, temp)
+    
     c1,c2,c3,c4 = st.columns(4)
-    c1.metric("🌡️ Cartagena", f"{temp:.1f}°C")
-    c2.metric("💰 Balance Neto", f"{balance:.2f} €")
-    c3.metric("🐔 Aves Activas", aves_activas)
-    c4.metric("🥚 Producción Hoy", prod_hoy)
+    c1.metric("🌡️ Temp (Cartagena)", f"{temp:.1f}°C")
+    c2.metric("🔋 Pienso en Silo", f"{pienso_real:.1f} kg")
+    c3.metric("⚖️ Carne en Vivo", f"{peso_total:.1f} kg")
+    c4.metric("💰 Beneficio", f"{(ventas['cantidad'].sum() - gastos['cantidad'].sum()):.2f} €")
 
-    # Stock de pienso estimado
-    stock_pienso = gastos['ilos_pienso'].sum() if not gastos.empty else 0
-    st.info(f"🌾 Stock de Pienso: {stock_pienso:.1f} kg")
+    if pienso_real < 25: st.error(f"🚨 ALERTA: Quedan solo {pienso_real:.1f}kg de pienso.")
 
-    if not produccion.empty:
-        st.plotly_chart(px.line(produccion, x='fecha', y='huevos', title="Histórico de Puesta"), use_container_width=True)
+    st.divider()
+    col_iz, col_de = st.columns(2)
+    with col_iz:
+        if not produccion.empty:
+            st.plotly_chart(px.area(produccion, x='fecha', y='huevos', title="Producción Real de Huevos"), use_container_width=True)
+    with col_de:
+        if not lotes.empty:
+            st.plotly_chart(px.pie(lotes, values='cantidad', names='raza', title="Distribución por Razas"), use_container_width=True)
 
-# ---------------- PREDICCIÓN & CRECIMIENTO ----------------
-elif menu=="🔮 Predicción & Crecimiento":
-    st.title("🔮 Predicción Automática")
-    dias = 30
-    fechas = [(datetime.now()+timedelta(days=i)).strftime("%d/%m") for i in range(dias)]
+# --- PREDICCIÓN PRO (CARNE + HUEVO) ---
+elif menu == "🔮 Predicción Pro":
+    st.title("🔮 Futuro del Corral (30 días)")
+    fechas = [(datetime.now()+timedelta(days=i)).strftime("%d/%m") for i in range(30)]
     h_data, c_data = [], []
-    for i in range(dias):
-        h_sum, c_sum = 0,0
-        for _, l in lotes.iterrows():
-            tipo, val = predecir_rendimiento(l, bajas, i)
-            if tipo=="H": h_sum += val
-            if tipo=="C": c_sum += val
-        h_data.append(h_sum)
-        c_data.append(c_sum)
-    col1,col2 = st.columns(2)
-    with col1: st.subheader("🥚 Huevos Estimados"); st.plotly_chart(px.line(x=fechas, y=h_data, color_discrete_sequence=['orange']), use_container_width=True)
-    with col2: st.subheader("⚖️ Crecimiento Carne"); st.plotly_chart(px.area(x=fechas, y=c_data, color_discrete_sequence=['red']), use_container_width=True)
-    if h_data: st.success(f"📈 Producción estimada mañana: {h_data[1]:.1f} huevos")
 
-# ---------------- ALTA DE LOTES ----------------
-elif menu=="🐣 Alta de Lotes":
-    st.title("🐣 Registro Automático de Lotes")
+    for i in range(30):
+        h_dia, c_dia = 0, 0
+        for _, l in lotes.iterrows():
+            f_a = datetime.strptime(l["fecha"], "%d/%m/%Y" if "/" in l["fecha"] else "%Y-%m-%d")
+            ed_sem = l["edad_inicial_semanas"] + ((datetime.now() - f_a).days + i) / 7
+            vivos = l['cantidad'] - (bajas[bajas['lote_id']==l['id']]['cantidad'].sum() if not bajas.empty else 0)
+            
+            if "Gallina" in l['especie'] or "Codorniz" in l['especie']:
+                h_dia += np.interp(ed_sem, CURVA_PUESTA["sem"], CURVA_PUESTA["p"]) * vivos
+            else:
+                c_dia += np.interp(ed_sem, CURVA_PESO["sem"], CURVA_PESO["kg"]) * vivos
+        h_data.append(h_dia); c_data.append(c_dia)
+
+    tab1, tab2 = st.tabs(["🥚 Predicción Huevos", "⚖️ Predicción Carne"])
+    with tab1: st.plotly_chart(px.line(x=fechas, y=h_data, title="Huevos Diarios Previstos"), use_container_width=True)
+    with tab2: st.plotly_chart(px.area(x=fechas, y=c_data, title="Evolución de Kilos Totales"), use_container_width=True)
+
+# --- ALTA LOTES ---
+elif menu == "🐣 Alta Lotes":
+    st.title("🐣 Entrada de Animales")
     with st.form("alta"):
         e = st.selectbox("Especie", list(ESPECIES_FULL.keys()))
-        rz = st.selectbox("Raza/Clase", ESPECIES_FULL[e])
+        rz = st.selectbox("Raza", ESPECIES_FULL[e])
         cant = st.number_input("Cantidad", 1)
-        ed = st.number_input("Edad al comprar (Semanas)", 0)
-        pr = st.number_input("Precio €", 0.0)
-        if st.form_submit_button("Registrar Lote"):
+        ed = st.number_input("Semanas de vida", 0)
+        pr = st.number_input("Precio unidad €", 0.0)
+        if st.form_submit_button("Registrar"):
             get_conn().execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial_semanas, precio_ud, estado) VALUES (?,?,?,?,?,?,?)",
-                               (datetime.now().strftime("%d/%m/%Y"), e, rz, cant, ed, pr, "Activo")).connection.commit()
+                               (datetime.now().strftime("%d/%m/%Y"), e, rz, int(cant), int(ed), pr, "Activo")).connection.commit()
             st.rerun()
 
-# ---------------- PRODUCCIÓN ----------------
-elif menu=="🥚 Producción":
-    st.title("🥚 Registro Diario")
-    with st.form("prod"):
-        l_id = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
-        h = st.number_input("Cantidad de Huevos", 1)
-        if st.form_submit_button("Guardar"):
-            get_conn().execute("INSERT INTO produccion (fecha,lote,huevos) VALUES (?,?,?)", (datetime.now().strftime("%d/%m/%Y"), l_id, h)).connection.commit()
-            st.rerun()
-
-# ---------------- VENTAS/GASTOS ----------------
-elif menu=="💰 Ventas/Gastos":
-    t1,t2 = st.tabs(["🛒 Ventas","💸 Gastos"])
-    with t1:
+# --- VENTAS/GASTOS ---
+elif menu == "💰 Ventas/Gastos":
+    v_tab, g_tab = st.tabs(["🛒 Ventas", "💸 Gastos"])
+    with v_tab:
         with st.form("v"):
-            p = st.number_input("Total €",0.0)
-            u = st.number_input("Unidades",1)
+            tipo = st.selectbox("Tipo", ["Huevos", "Carne", "Ave Viva"])
+            p = st.number_input("Importe €", 0.0); u = st.number_input("Unidades/Huevos", 0); kg = st.number_input("Si es carne, Kg totales", 0.0)
             if st.form_submit_button("Registrar Venta"):
-                get_conn().execute("INSERT INTO ventas (fecha,tipo_venta,cantidad,unidades) VALUES (?,?,?,?)",
-                                   (datetime.now().strftime("%d/%m/%Y"),"Venta",p,u)).connection.commit(); st.rerun()
-    with t2:
+                get_conn().execute("INSERT INTO ventas (fecha, tipo_venta, cantidad, unidades, kg_vendidos) VALUES (?,?,?,?,?)", 
+                                   (datetime.now().strftime("%d/%m/%Y"), tipo, p, u, kg)).connection.commit(); st.rerun()
+    with g_tab:
         with st.form("g"):
-            cat = st.selectbox("Categoría",["Pienso","Medicina","Aves","Obras"])
-            imp = st.number_input("Importe €",0.0)
-            kg = st.number_input("Kg Pienso",0.0)
+            cat = st.selectbox("Categoría", ["Pienso", "Aves", "Luz/Agua", "Otros"])
+            imp = st.number_input("Importe €", 0.0); kg = st.number_input("Kilos (solo si es pienso)", 0.0)
             if st.form_submit_button("Registrar Gasto"):
-                get_conn().execute("INSERT INTO gastos (fecha,categoria,concepto,cantidad,ilos_pienso) VALUES (?,?,?,?,?)",
-                                   (datetime.now().strftime("%d/%m/%Y"),cat,"Gasto General",imp,kg)).connection.commit(); st.rerun()
+                get_conn().execute("INSERT INTO gastos (fecha, categoria, concepto, cantidad, kilos_pienso) VALUES (?,?,?,?,?)", 
+                                   (datetime.now().strftime("%d/%m/%Y"), cat, "General", imp, kg)).connection.commit(); st.rerun()
 
-# ---------------- SALUD IA ----------------
-elif menu=="🩺 Salud IA":
-    st.title("🩺 Análisis IA de Aves")
-    for _, l in lotes.iterrows():
-        with st.expander(f"Lote {l['id']}: {l['especie']} ({l['raza']})"):
-            subir = st.file_uploader("Subir foto", type=['jpg','png','jpeg'], key=f"f_{l['id']}")
-            if subir and st.button("Analizar IA", key=f"b_{l['id']}"):
-                blob = subir.read()
-                res = analizar_ia(blob, l['especie'], st.session_state['gemini_key'])
-                with get_conn() as conn: conn.execute("INSERT INTO fotos (lote_id,fecha,imagen,nota) VALUES (?,?,?,?)",
-                                                     (l['id'], datetime.now().strftime("%d/%m/%Y"), sqlite3.Binary(blob), res))
-                st.success("✅ Analizado y guardado.")
-            f_db = fotos[fotos['lote_id']==l['id']].tail(1)
-            if not f_db.empty:
-                c1,c2 = st.columns([1,2])
-                c1.image(f_db.iloc[0]['imagen'])
-                c2.info(f"🩺 Último informe IA:\n{f_db.iloc[0]['nota']}")
+# --- PRODUCCIÓN ---
+elif menu == "🥚 Producción":
+    st.title("🥚 Registro Puesta")
+    with st.form("p"):
+        l_id = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
+        h = st.number_input("Huevos", 1)
+        if st.form_submit_button("Guardar"):
+            get_conn().execute("INSERT INTO produccion (fecha, lote, huevos) VALUES (?,?,?)", (datetime.now().strftime("%d/%m/%Y"), l_id, h)).connection.commit(); st.rerun()
 
-# ---------------- HISTÓRICO ----------------
-elif menu=="📜 Histórico":
-    t = st.selectbox("Tabla",["lotes","produccion","gastos","ventas","bajas","fotos"])
+# --- SALUD IA ---
+elif menu == "🩺 Salud IA":
+    st.title("🩺 Escáner Veterinario")
+    f = st.file_uploader("Foto de las aves", type=['jpg','jpeg','png'])
+    if f and st.session_state['gemini_key']:
+        if st.button("Analizar con Gemini"):
+            genai.configure(api_key=st.session_state['gemini_key'])
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            res = model.generate_content(["Diagnóstico rápido de salud avícola:", {"mime_type": "image/jpeg", "data": f.read()}])
+            st.info(res.text)
+
+# --- HISTÓRICO ---
+elif menu == "📜 Histórico":
+    t = st.selectbox("Tabla", ["lotes", "produccion", "gastos", "ventas", "bajas"])
     df = cargar(t)
-    st.dataframe(df,use_container_width=True)
-    idx = st.number_input("Borrar ID",0)
-    if st.button("Eliminar"):
-        get_conn().execute(f"DELETE FROM {t} WHERE id={idx}").connection.commit()
-        st.rerun()
+    st.dataframe(df, use_container_width=True)
+    idx = st.number_input("Eliminar ID", 0)
+    if st.button("Borrar"): get_conn().execute(f"DELETE FROM {t} WHERE id={idx}").connection.commit(); st.rerun()

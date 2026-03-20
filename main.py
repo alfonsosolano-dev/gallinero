@@ -5,9 +5,19 @@ from datetime import datetime, timedelta
 import io
 import requests
 import numpy as np
-from sklearn.linear_model import LinearRegression
-from openai import OpenAI
 
+# Importaciones "Protegidas" para que la App no se rompa si GitHub va lento
+try:
+    from sklearn.linear_model import LinearRegression
+except ImportError:
+    st.warning("IA Predictiva en espera: Instalando componentes en GitHub...")
+
+try:
+    import plotly.express as px
+except ImportError:
+    pass 
+
+# ... (Aquí sigue el resto de tu código V49.0)
 # =================================================================
 # BLOQUE 1: CONFIGURACIÓN Y MOTOR DE DATOS
 # =================================================================

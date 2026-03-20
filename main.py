@@ -8,75 +8,52 @@ import numpy as np
 import base64
 import google.generativeai as genai
 
-# --- CONFIGURACIÓN DE LLAVES AUTOMÁTICAS ---
-# Esto busca las llaves en los "Secrets" de Streamlit para que no tengas que ponerlas siempre
-try:
-    GEMINI_KEY = st.secrets["GEMINI_KEY"]
-except:
-    GEMINI_KEY = ""
-
-try:
-    AEMET_KEY = st.secrets["AEMET_KEY"]
-except:
-    AEMET_KEY = ""
-
-# --- EL RESTO DEL CÓDIGO SIGUE IGUAL (V58) ---
-st.set_page_config(page_title="CORRAL OMNI V59", layout="wide")
-
-# ... (Aquí va todo el resto del código que te pasé en la V58) ...
-# Solo asegúrate de cambiar los st.sidebar.text_input por esto:
-
-with st.sidebar.expander("🔑 Configuración de Llaves"):
-    if not GEMINI_KEY:
-        GEMINI_KEY = st.text_input("Google Gemini Key", type="password")
-    else:
-        st.success("✅ Gemini Conectado (Secret)")
-        
-    if not AEMET_KEY:
-        AEMET_KEY = st.text_input("AEMET Key", type="password")
-    else:
-        st.success("✅ AEMET Conectada (Secret)")
-
-# --- FIX DE LIBRERÍAS (Para evitar errores de pantalla roja) ---
+# --- PROTECCIÓN DE LIBRERÍAS (Evita pantallas rojas) ---
 try:
     from sklearn.linear_model import LinearRegression
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
+    SK_OK = True
+except:
+    SK_OK = False
 
-# =================================================================
-# 1. BASE DE DATOS PROFESIONAL
-# =================================================================
+try:
+    import plotly.express as px
+    PX_OK = True
+except:
+    PX_OK = False
+
+# --- CONFIGURACIÓN DE LLAVES (SECRETS) ---
+# Se leen de la configuración de Streamlit Cloud si están puestas
+GEMINI_KEY = st.secrets.get("GEMINI_KEY", "")
+AEMET_KEY = st.secrets.get("AEMET_KEY", "")
+
+# --- INICIALIZACIÓN DE LA APP ---
+st.set_page_config(page_title="CORRAL OMNI V61", layout="wide", page_icon="🚜")
 DB_PATH = "corral_maestro_pro.db"
 
 def get_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def inicializar_db():
-    conn = get_conn()
-    c = conn.cursor()
-    # Tablas con todas las columnas de tu Excel y capturas
-    tablas = {
-        "lotes": "id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, cantidad INTEGER, edad_inicial INTEGER, precio_ud REAL, estado TEXT",
-        "produccion": "id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, huevos INTEGER, color_huevo TEXT",
-        "gastos": "id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, categoria TEXT, concepto TEXT, cantidad REAL, ilos_pienso REAL, destinado_a TEXT",
-        "ventas": "id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, cliente TEXT, tipo_venta TEXT, cantidad REAL, lote_id INTEGER, ilos_finale REAL, unidades INTEGER",
-        "bajas": "id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote_id INTEGER, cantidad INTEGER, motivo TEXT",
-        "fotos": "id INTEGER PRIMARY KEY AUTOINCREMENT, lote_id INTEGER, fecha TEXT, imagen BLOB, nota TEXT"
-    }
-    for n, e in tablas.items():
-        c.execute(f"CREATE TABLE IF NOT EXISTS {n} ({e})")
-    conn.commit()
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS lotes 
+            (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, especie TEXT, raza TEXT, 
+             cantidad INTEGER, edad_inicial INTEGER, precio_ud REAL, estado TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS produccion 
+            (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote INTEGER, huevos INTEGER, color_huevo TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS gastos 
+            (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, categoria TEXT, concepto TEXT, 
+             cantidad REAL, ilos_pienso REAL, destinado_a TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS ventas 
+            (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, tipo_venta TEXT, cantidad REAL, 
+             lote_id INTEGER, unidades INTEGER)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS bajas 
+            (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, lote_id INTEGER, cantidad INTEGER, motivo TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS fotos 
+            (id INTEGER PRIMARY KEY AUTOINCREMENT, lote_id INTEGER, fecha TEXT, imagen BLOB, nota TEXT)""")
     conn.close()
 
-def cargar_tabla(t):
-    try:
-        with get_conn() as conn: return pd.read_sql(f"SELECT * FROM {t}", conn)
-    except: return pd.DataFrame()
-
-# =================================================================
-# 2. MOTOR DE INTELIGENCIA (IA + CLIMA + PIENSO)
-# =================================================================
+# --- MOTOR DE INTELIGENCIA Y CONSUMO ---
 CONFIG_ESPECIES = {
     "Gallina Roja": 0.110, "Gallina Blanca": 0.105, "Gallina Huevo Verde": 0.115, 
     "Codorniz": 0.025, "Pollo Blanco": 0.180, "Pollo Campero": 0.140
@@ -106,127 +83,110 @@ def calcular_pienso_real(gastos, lotes, t_actual):
             except: continue
     return max(0, comprado - consumo)
 
-# =================================================================
-# 3. INTERFAZ (MENÚS E IZQUIERDA)
-# =================================================================
+# --- INTERFAZ LATERAL ---
 inicializar_db()
-st.sidebar.title("🚜 CORRAL OMNI V58")
-menu = st.sidebar.radio("", ["🏠 Dashboard", "📈 Crecimiento IA", "🥚 Producción", "💰 Ventas/Bajas", "💸 Gastos", "🎄 Navidad", "🐣 Alta Lotes", "📜 Histórico", "💾 Copias"])
+st.sidebar.title("🚜 CORRAL OMNI V61")
+menu = st.sidebar.radio("MENÚ", ["🏠 Dashboard", "📈 Crecimiento IA", "🥚 Producción", "💰 Ventas/Bajas", "💸 Gastos", "🎄 Navidad", "🐣 Alta Lotes", "📜 Histórico", "💾 Copias"])
 
-GEMINI_KEY = st.sidebar.text_input("🔑 Gemini Key", type="password")
-AEMET_KEY = st.sidebar.text_input("🌡️ AEMET Key", type="password")
+if not GEMINI_KEY: GEMINI_KEY = st.sidebar.text_input("🔑 Gemini Key", type="password")
+if not AEMET_KEY: AEMET_KEY = st.sidebar.text_input("🌡️ AEMET Key", type="password")
 
-lotes, gastos, produccion, ventas = cargar_tabla("lotes"), cargar_tabla("gastos"), cargar_tabla("produccion"), cargar_tabla("ventas")
+# Carga de datos
+def cargar(t): return pd.read_sql(f"SELECT * FROM {t}", get_conn())
+lotes, gastos, produccion, ventas = cargar("lotes"), cargar("gastos"), cargar("produccion"), cargar("ventas")
 
-# --- 🏠 DASHBOARD (ESTILO CAPTURA IMAGE_A968DA.PNG) ---
+# --- 🏠 DASHBOARD ---
 if menu == "🏠 Dashboard":
-    st.title("🏠 Panel de Control")
+    st.title("🏠 Control de Granja")
     temp = get_clima(AEMET_KEY)
     stock = calcular_pienso_real(gastos, lotes, temp)
-    inversion = gastos['cantidad'].sum() if not gastos.empty else 0.0
     
     c1, c2, c3 = st.columns(3)
-    c1.metric("💸 Inversión Total", f"{inversion:.2f} €")
+    c1.metric("💸 Inversión Total", f"{gastos['cantidad'].sum() if not gastos.empty else 0:.2f} €")
     c2.metric("🔋 Stock Pienso", f"{stock:.1f} kg")
-    c3.metric("⏳ Autonomía", f"{int(stock/2) if stock > 0 else 0} días")
+    c3.metric("🌡️ Temp (Cartagena)", f"{temp:.1f} °C")
 
-    if stock <= 0:
-        st.error("⚠️ Según tus compras y el tiempo de los lotes, no debería quedar pienso.")
+    if SK_OK and not gastos.empty and len(gastos[gastos['ilos_pienso']>0]) > 2:
+        st.info("🔮 IA Predictiva activa analizando consumos...")
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("📊 Gastos por Destinatario")
-        if not gastos.empty:
-            st.bar_chart(gastos.groupby('destinado_a')['cantidad'].sum())
-    with col_b:
-        st.subheader("🥚 Producción Reciente")
-        if not produccion.empty:
-            st.line_chart(produccion.set_index('fecha')['huevos'])
+    if PX_OK and not produccion.empty:
+        fig = px.bar(produccion, x='fecha', y='huevos', color='color_huevo', title="Puesta por Color/Especie")
+        st.plotly_chart(fig, use_container_width=True)
 
 # --- 📈 CRECIMIENTO IA ---
 elif menu == "📈 Crecimiento IA":
-    st.title("📈 Análisis de Aves con Gemini")
-    df_f = cargar_tabla("fotos")
-    for _, r in lotes.iterrows():
-        with st.expander(f"📸 {r['especie']} {r['raza']} (ID: {r['id']})"):
-            c_iz, c_de = st.columns([2, 1])
-            with c_iz:
-                prev = df_f[df_f['lote_id']==r['id']].tail(1)
-                if not prev.empty: st.image(prev.iloc[0]['imagen'])
-                img = st.file_uploader("Subir evolución", type=['jpg','png','jpeg'], key=f"f{r['id']}")
-                if img and st.button("Analizar con IA", key=f"b{r['id']}"):
-                    blob = img.read()
-                    genai.configure(api_key=GEMINI_KEY)
-                    model = genai.GenerativeModel('gemini-1.5-flash')
-                    res = model.generate_content([f"Analiza estas {r['especie']}. Salud y peso.", {"mime_type": "image/jpeg", "data": blob}])
-                    get_conn().execute("INSERT INTO fotos (lote_id, fecha, imagen, nota) VALUES (?,?,?,?)",
-                                 (r['id'], datetime.now().strftime("%d/%m/%Y"), sqlite3.Binary(blob), res.text)).connection.commit(); st.rerun()
-            with c_de:
-                if not prev.empty: st.info(prev.iloc[0]['nota'])
+    st.header("📈 Análisis Visual con IA")
+    df_f = cargar("fotos")
+    if lotes.empty: st.warning("Crea un lote primero.")
+    else:
+        for _, r in lotes.iterrows():
+            with st.expander(f"📸 {r['especie']} {r['raza']} (ID: {r['id']})", expanded=True):
+                col_i, col_d = st.columns([2, 1])
+                with col_i:
+                    f_db = df_f[df_f['lote_id']==r['id']].tail(1)
+                    if not f_db.empty: st.image(f_db.iloc[0]['imagen'])
+                    sub = st.file_uploader("Nueva foto", type=['jpg','png','jpeg'], key=f"f{r['id']}")
+                    if sub and st.button("💾 Analizar", key=f"b{r['id']}"):
+                        blob = sub.read()
+                        genai.configure(api_key=GEMINI_KEY)
+                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        res = model.generate_content([f"Analiza estas aves {r['especie']}. Evalúa salud y crecimiento.", {"mime_type": "image/jpeg", "data": blob}])
+                        conn = get_conn()
+                        conn.execute("INSERT INTO fotos (lote_id, fecha, imagen, nota) VALUES (?,?,?,?)",
+                                     (r['id'], datetime.now().strftime("%d/%m/%Y"), sqlite3.Binary(blob), res.text))
+                        conn.commit(); st.rerun()
+                with col_d:
+                    if not f_db.empty: st.info(f_db.iloc[0]['nota'])
 
 # --- 🥚 PRODUCCIÓN ---
 elif menu == "🥚 Producción":
     st.title("🥚 Registro de Huevos")
     with st.form("p"):
-        f = st.date_input("Fecha")
-        l = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
-        col = st.selectbox("Color", ["Normal", "Verde", "Azul", "Codorniz"])
+        f = st.date_input("Fecha"); l = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
+        col = st.selectbox("Color/Tipo", ["Normal", "Verde", "Azul", "Codorniz"])
         h = st.number_input("Cantidad", 1)
         if st.form_submit_button("Guardar"):
             get_conn().execute("INSERT INTO produccion (fecha, lote, huevos, color_huevo) VALUES (?,?,?,?)", (f.strftime("%d/%m/%Y"), l, h, col)).connection.commit(); st.rerun()
 
 # --- 💰 VENTAS/BAJAS ---
 elif menu == "💰 Ventas/Bajas":
-    st.title("💰 Salidas del Corral")
-    tab_v, tab_b = st.tabs(["Ventas/Consumo", "Bajas (Muertes)"])
-    with tab_v:
+    st.title("💰 Salidas y Bajas")
+    t1, t2 = st.tabs(["Ventas", "Bajas"])
+    with t1:
         with st.form("v"):
-            tipo = st.radio("Tipo", ["Venta", "Consumo Propio"])
+            tipo = st.radio("Tipo", ["Venta", "Consumo"])
             l = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
-            u = st.number_input("Unidades", 1); p = st.number_input("Total €", 0.0)
-            if st.form_submit_button("Registrar Venta"):
+            u = st.number_input("Unidades", 1); p = st.number_input("Euros €", 0.0)
+            if st.form_submit_button("Vender"):
                 get_conn().execute("INSERT INTO ventas (fecha, tipo_venta, cantidad, lote_id, unidades) VALUES (?,?,?,?,?)", 
                                    (datetime.now().strftime("%d/%m/%Y"), tipo, p, l, u)).connection.commit(); st.rerun()
-    with tab_b:
+    with t2:
         with st.form("b"):
-            l_b = st.selectbox("Lote afectado", lotes['id'].tolist() if not lotes.empty else [])
-            c_b = st.number_input("Cantidad", 1); mot = st.text_input("Motivo")
+            l_b = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
+            c_b = st.number_input("Cantidad", 1); m = st.text_input("Motivo")
             if st.form_submit_button("Registrar Baja"):
                 get_conn().execute("INSERT INTO bajas (fecha, lote_id, cantidad, motivo) VALUES (?,?,?,?)", 
-                                   (datetime.now().strftime("%d/%m/%Y"), l_b, c_b, mot)).connection.commit(); st.rerun()
+                                   (datetime.now().strftime("%d/%m/%Y"), l_b, c_b, m)).connection.commit(); st.rerun()
 
 # --- 💸 GASTOS ---
 elif menu == "💸 Gastos":
-    st.title("💸 Registro de Gastos")
+    st.title("💸 Gastos")
     with st.form("g"):
-        cat = st.selectbox("Categoría", ["Pienso Gallinas", "Pienso Pollos", "Medicina", "Infraestructura", "Otros"])
+        cat = st.selectbox("Categoría", ["Pienso", "Medicina", "Aves", "Infraestructura"])
         dest = st.selectbox("Destinatario", ["Gallinas", "Pollos", "Codornices", "General"])
-        con = st.text_input("Concepto (Ej: Saco 25kg)"); i = st.number_input("Importe €", 0.0); kg = st.number_input("Kg Pienso (si aplica)", 0.0)
+        con = st.text_input("Concepto"); i = st.number_input("Importe €", 0.0); kg = st.number_input("Kg Pienso", 0.0)
         f = st.date_input("Fecha")
-        if st.form_submit_button("Guardar Gasto"):
+        if st.form_submit_button("Guardar"):
             get_conn().execute("INSERT INTO gastos (fecha, categoria, concepto, cantidad, ilos_pienso, destinado_a) VALUES (?,?,?,?,?,?)",
                                (f.strftime("%d/%m/%Y"), cat, con, i, kg, dest)).connection.commit(); st.rerun()
 
-# --- 💾 COPIAS ---
-elif menu == "💾 Copias":
-    st.title("💾 Gestión de Datos")
-    st.write("Usa el archivo `.db` para restaurar todo en otro dispositivo.")
-    with open(DB_PATH, "rb") as f:
-        st.download_button("📥 Descargar Copia de Seguridad", f, "corral_master.db")
-    
-    sub = st.file_uploader("Subir Copia (.db)", type="db")
-    if sub and st.button("🚀 Restaurar Ahora"):
-        with open(DB_PATH, "wb") as f: f.write(sub.getbuffer())
-        st.success("Base de datos restaurada con éxito."); st.rerun()
-
 # --- 🎄 NAVIDAD ---
 elif menu == "🎄 Navidad":
-    st.title("🎄 Planificación Navidad 2026")
-    st.info("Cálculo basado en 20 de Diciembre como fecha límite.")
-    madurez = {"Blanco Engorde": 55, "Campero": 90}
-    for rz, d in madurez.items():
+    st.title("🎄 Plan Navidad 2026")
+    m = {"Blanco Engorde": 55, "Campero": 90}
+    for rz, d in m.items():
         f_c = datetime(2026, 12, 20) - timedelta(days=d)
-        st.warning(f"🍗 **{rz}**: Debes comprar el lote el día **{f_c.strftime('%d/%m/%Y')}**")
+        st.warning(f"🍗 **{rz}**: Comprar el lote el **{f_c.strftime('%d/%m/%Y')}**")
 
 # --- 🐣 ALTA LOTES ---
 elif menu == "🐣 Alta Lotes":
@@ -234,15 +194,23 @@ elif menu == "🐣 Alta Lotes":
     with st.form("a"):
         esp = st.selectbox("Especie", ["Gallina", "Codorniz", "Pollo"])
         rz = st.selectbox("Raza", ["Roja", "Blanca", "Huevo Verde", "Campero", "Blanco"])
-        cant = st.number_input("Cantidad", 1); ed = st.number_input("Edad inicial (días)", 0)
-        pr = st.number_input("Precio ud €", 0.0)
+        cant = st.number_input("Cantidad", 1); ed = st.number_input("Edad (días)", 0); p = st.number_input("Precio ud", 0.0)
         if st.form_submit_button("Crear"):
             get_conn().execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, precio_ud, estado) VALUES (?,?,?,?,?,?, 'Activo')", 
-                               (datetime.now().strftime("%d/%m/%Y"), esp, rz, int(cant), int(ed), pr)).connection.commit(); st.rerun()
+                               (datetime.now().strftime("%d/%m/%Y"), esp, rz, int(cant), int(ed), p)).connection.commit(); st.rerun()
+
+# --- 💾 COPIAS ---
+elif menu == "💾 Copias":
+    st.title("💾 Copias de Seguridad")
+    with open(DB_PATH, "rb") as f: st.download_button("📥 Descargar .db", f, "corral_master.db")
+    sub = st.file_uploader("Subir .db", type="db")
+    if sub and st.button("🚀 Restaurar"):
+        with open(DB_PATH, "wb") as f: f.write(sub.getbuffer())
+        st.success("Hecho."); st.rerun()
 
 # --- 📜 HISTÓRICO ---
 elif menu == "📜 Histórico":
-    t = st.selectbox("Ver tabla:", ["lotes", "gastos", "produccion", "ventas", "bajas"])
-    df = cargar_tabla(t); st.dataframe(df)
+    t = st.selectbox("Tabla", ["lotes", "gastos", "produccion", "ventas", "bajas", "fotos"])
+    df = cargar(t); st.dataframe(df)
     idx = st.number_input("ID a borrar", 0)
     if st.button("Eliminar"): get_conn().execute(f"DELETE FROM {t} WHERE id={idx}").connection.commit(); st.rerun()

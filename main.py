@@ -8,6 +8,35 @@ import numpy as np
 import base64
 import google.generativeai as genai
 
+# --- CONFIGURACIÓN DE LLAVES AUTOMÁTICAS ---
+# Esto busca las llaves en los "Secrets" de Streamlit para que no tengas que ponerlas siempre
+try:
+    GEMINI_KEY = st.secrets["GEMINI_KEY"]
+except:
+    GEMINI_KEY = ""
+
+try:
+    AEMET_KEY = st.secrets["AEMET_KEY"]
+except:
+    AEMET_KEY = ""
+
+# --- EL RESTO DEL CÓDIGO SIGUE IGUAL (V58) ---
+st.set_page_config(page_title="CORRAL OMNI V59", layout="wide")
+
+# ... (Aquí va todo el resto del código que te pasé en la V58) ...
+# Solo asegúrate de cambiar los st.sidebar.text_input por esto:
+
+with st.sidebar.expander("🔑 Configuración de Llaves"):
+    if not GEMINI_KEY:
+        GEMINI_KEY = st.text_input("Google Gemini Key", type="password")
+    else:
+        st.success("✅ Gemini Conectado (Secret)")
+        
+    if not AEMET_KEY:
+        AEMET_KEY = st.text_input("AEMET Key", type="password")
+    else:
+        st.success("✅ AEMET Conectada (Secret)")
+
 # --- FIX DE LIBRERÍAS (Para evitar errores de pantalla roja) ---
 try:
     from sklearn.linear_model import LinearRegression

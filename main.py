@@ -6,25 +6,16 @@ import io
 import requests
 import numpy as np
 import base64
+import google.generativeai as genai
 
-# --- IMPORTACIONES PROTEGIDAS ---
-try:
-    from sklearn.linear_model import LinearRegression
-except ImportError:
-    LinearRegression = None
-
-try:
-    import plotly.express as px
-except ImportError:
-    px = None
-
-# =================================================================
-# BLOQUE 1: CONFIGURACIÓN Y MOTOR DE DATOS (V54.0)
-# =================================================================
-st.set_page_config(page_title="CORRAL IA MASTER PRO V54.0", layout="wide", page_icon="🥚")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="CORRAL IA MASTER V56", layout="wide", page_icon="🥚")
 
 DB_PATH = "corral_maestro_pro.db"
 
+# =================================================================
+# MOTOR DE DATOS Y TABLAS
+# =================================================================
 def get_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -40,14 +31,6 @@ def inicializar_db():
     }
     for n, e in tablas.items():
         c.execute(f"CREATE TABLE IF NOT EXISTS {n} ({e})")
-        # Parches de columnas críticas
-        if n == "produccion":
-            try: c.execute("ALTER TABLE produccion ADD COLUMN color_huevo TEXT")
-            except: pass
-        if n == "gastos":
-            for col in ["ilos_pienso REAL", "destinado_a TEXT"]:
-                try: c.execute(f"ALTER TABLE gastos ADD COLUMN {col}")
-                except: pass
     conn.commit()
     conn.close()
 
@@ -57,14 +40,14 @@ def cargar_tabla(t):
     except: return pd.DataFrame()
 
 # =================================================================
-# BLOQUE 2: INTELIGENCIA DE CONSUMO Y CLIMA
+# INTELIGENCIA: CLIMA, CONSUMO Y GEMINI GRATIS
 # =================================================================
 CONFIG_ESPECIES = {
     "Gallina Roja": 0.110, "Gallina Blanca": 0.105, "Gallina Huevo Verde": 0.115, 
     "Codorniz Japónica": 0.025, "Pollo Blanco Engorde": 0.180, "Pollo Campero": 0.140
 }
 
-def get_weather_cartagena(api_key):
+def get_clima_cartagena(api_key):
     if not api_key: return 22.0
     try:
         url = f"https://opendata.aemet.es/opendata/api/observacion/convencional/datos/estacion/7012D?api_key={api_key}"
@@ -73,10 +56,9 @@ def get_weather_cartagena(api_key):
         return float(datos[-1]["ta"])
     except: return 22.0
 
-def calcular_pienso_real(gastos, lotes, t_actual):
+def calcular_pienso_pro(gastos, lotes, t_actual):
     comprado = gastos['ilos_pienso'].sum() if not gastos.empty else 0
     consumo = 0
-    ajuste = 0.85 # Voracidad reducida para realismo
     f_clima = 1.15 if t_actual > 30 else (1.10 if t_actual < 10 else 1.0)
     
     if not lotes.empty:
@@ -84,7 +66,7 @@ def calcular_pienso_real(gastos, lotes, t_actual):
             try:
                 f_ini = datetime.strptime(r["fecha"], "%d/%m/%Y" if "/" in r["fecha"] else "%Y-%m-%d")
                 dias = (datetime.now() - f_ini).days
-                base = CONFIG_ESPECIES.get(f"{r['especie']} {r['raza']}", 0.100) * ajuste * f_clima
+                base = CONFIG_ESPECIES.get(f"{r['especie']} {r['raza']}", 0.100) * 0.85 * f_clima
                 for d in range(dias + 1):
                     edad = r["edad_inicial"] + d
                     f_edad = 0.3 if edad < 20 else (0.7 if edad < 45 else 1.0)
@@ -92,131 +74,109 @@ def calcular_pienso_real(gastos, lotes, t_actual):
             except: continue
     return max(0, comprado - consumo)
 
-# =================================================================
-# BLOQUE 3: IA VISUAL EVOLUTIVA
-# =================================================================
-def analizar_evolucion(foto_act, foto_prev_blob, dias, especie, api_key):
-    if not api_key: return "Sin API Key."
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key)
-    img_b64 = base64.b64encode(foto_act).decode('utf-8')
-    prompt = f"Analiza estas {especie}. Han pasado {dias} días desde la última foto. Evalúa crecimiento y salud."
+def analizar_foto_gratis(blob, especie, api_key):
+    if not api_key: return "⚠️ Pega tu Google Key en el lateral."
     try:
-        res = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": [{"type": "text", "text": prompt},
-                      {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}]}]
-        )
-        return res.choices[0].message.content
-    except Exception as e: return f"Error IA: {e}"
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        contenido = [{"mime_type": "image/jpeg", "data": blob}, 
+                     f"Analiza la salud y crecimiento de estas {especie}. Sé muy específico."]
+        res = model.generate_content(contenido)
+        return res.text
+    except Exception as e: return f"Error IA: {str(e)}"
 
 # =================================================================
-# BLOQUE 4: INTERFAZ Y NAVEGACIÓN
+# INTERFAZ PRINCIPAL (DISEÑO IMAGE_0.PNG)
 # =================================================================
 inicializar_db()
-lotes, gastos, produccion, ventas = cargar_tabla("lotes"), cargar_tabla("gastos"), cargar_tabla("produccion"), cargar_tabla("ventas")
+lotes, gastos, produccion = cargar_tabla("lotes"), cargar_tabla("gastos"), cargar_tabla("produccion")
 
-st.sidebar.title("🚜 CORRAL IA V54")
-menu = st.sidebar.radio("", ["🏠 Dashboard", "📈 Crecimiento IA", "🥚 Puesta", "💸 Gastos", "🐣 Alta Aves", "💰 Ventas", "🎄 Navidad", "📜 Histórico", "💾 Copias"])
-OPENAI_KEY = st.sidebar.text_input("OpenAI Key", type="password")
-AEMET_KEY = st.sidebar.text_input("AEMET Key (Cartagena)", type="password")
+st.sidebar.title("🚜 CORRAL MASTER V56")
+menu = st.sidebar.radio("", ["🏠 Dashboard", "📈 Crecimiento IA", "🥚 Puesta", "💸 Gastos", "🐣 Alta Aves", "💾 Copias"])
+GEMINI_KEY = st.sidebar.text_input("🔑 Google Gemini Key (Gratis)", type="password")
+AEMET_KEY = st.sidebar.text_input("🌡️ AEMET Key", type="password")
 
 # --- 🏠 DASHBOARD ---
 if menu == "🏠 Dashboard":
-    st.title("🚜 Panel General")
-    temp = get_weather_cartagena(AEMET_KEY)
-    stock = calcular_pienso_real(gastos, lotes, temp)
+    st.title("🚜 Panel General de Control")
+    temp = get_clima_cartagena(AEMET_KEY)
+    stock = calcular_pienso_pro(gastos, lotes, temp)
     
     c1, c2, c3 = st.columns(3)
     c1.metric("🔋 Stock Pienso", f"{stock:.1f} kg")
     c2.metric("🌡️ Temp Cartagena", f"{temp:.1f} °C")
     c3.metric("🥚 Puesta Total", f"{produccion['huevos'].sum() if not produccion.empty else 0} uds")
 
-    if px and not produccion.empty:
-        st.subheader("📊 Producción por Especie/Color")
-        fig = px.bar(produccion, x='fecha', y='huevos', color='color_huevo', title="Evolución de Puesta")
+    if not produccion.empty:
+        import plotly.express as px
+        fig = px.bar(produccion, x='fecha', y='huevos', color='color_huevo', title="Producción por Tipo/Color")
         st.plotly_chart(fig, use_container_width=True)
 
-# --- 📈 CRECIMIENTO IA ---
+# --- 📈 CRECIMIENTO IA (DISEÑO SOLICITADO) ---
 elif menu == "📈 Crecimiento IA":
-    st.title("📈 Seguimiento Visual Evolutivo")
-    if lotes.empty: st.warning("No hay aves registradas.")
+    st.title("📈 Seguimiento Visual (IA Google)")
+    df_fotos = cargar_tabla("fotos")
+    
+    if lotes.empty: st.warning("No hay aves.")
     else:
-        df_fotos = cargar_tabla("fotos")
         for _, r in lotes.iterrows():
-            with st.expander(f"📸 {r['especie']} {r['raza']} (Lote {r['id']})", expanded=True):
-                c_img, c_hist = st.columns([2, 1])
-                with c_img:
-                    t1, t2 = st.tabs(["🎥 Cámara", "📁 Galería"])
-                    with t1: cam = st.camera_input("Foto", key=f"c_{r['id']}")
-                    with t2: arc = st.file_uploader("Archivo", type=['jpg','png','jpeg'], key=f"a_{r['id']}")
+            with st.expander(f"📋 LOTE {r['id']}: {r['especie']} {r['raza']}", expanded=True):
+                col_izq, col_der = st.columns([2, 1])
+                
+                with col_izq:
+                    # Foto más reciente
+                    prev = df_fotos[df_fotos['lote_id']==r['id']].tail(1)
+                    if not prev.empty: st.image(prev.iloc[0]['imagen'], use_column_width=True)
+                    
+                    st.divider()
+                    t1, t2 = st.tabs(["🎥 Cámara", "📁 Archivo"])
+                    with t1: cam = st.camera_input("Capturar", key=f"c_{r['id']}")
+                    with t2: arc = st.file_uploader("Subir", type=['jpg','png','jpeg'], key=f"f_{r['id']}")
                     
                     foto = cam if cam else arc
-                    if foto and st.button("💾 Guardar y Analizar", key=f"b_{r['id']}"):
+                    if foto and st.button("💾 Guardar y Analizar Gratis", key=f"b_{r['id']}"):
                         blob = foto.read()
-                        # Buscar previa para comparar
-                        prev = df_fotos[df_fotos['lote_id']==r['id']].tail(1)
-                        dias = (datetime.now() - datetime.strptime(prev.iloc[0]['fecha'], "%d/%m/%Y")).days if not prev.empty else 0
-                        
-                        nota = analizar_evolucion(blob, None, dias, r['especie'], OPENAI_KEY)
-                        
+                        nota = analizar_foto_gratis(blob, r['especie'], GEMINI_KEY)
                         conn = get_conn()
                         conn.execute("INSERT INTO fotos (lote_id, fecha, imagen, nota) VALUES (?,?,?,?)",
                                      (r['id'], datetime.now().strftime("%d/%m/%Y"), sqlite3.Binary(blob), nota))
-                        conn.commit(); st.success("Análisis completado."); st.rerun()
-                with c_hist:
-                    hist = df_fotos[df_fotos['lote_id']==r['id']].tail(3)
-                    for i, h in hist.iterrows():
-                        st.image(h['imagen'], caption=f"{h['fecha']}")
-                        if h['nota']: st.caption(f"IA: {h['nota'][:100]}...")
+                        conn.commit(); st.rerun()
+                
+                with col_der:
+                    st.metric("Total Aves", f"{r['cantidad']} uds")
+                    if not prev.empty:
+                        st.write("### 🤖 Informe IA:")
+                        st.info(prev.iloc[0]['nota'])
 
 # --- 🥚 PUESTA ---
 elif menu == "🥚 Puesta":
-    st.title("🥚 Registro de Huevos")
+    st.title("🥚 Registro de Puesta")
     with st.form("p"):
         f = st.date_input("Fecha"); l = st.selectbox("Lote", lotes['id'].tolist() if not lotes.empty else [])
-        col = st.selectbox("Tipo/Color", ["Normal", "Verde (Araucana)", "Azul", "Codorniz"])
+        col = st.selectbox("Color", ["Normal", "Verde", "Azul", "Codorniz"])
         cant = st.number_input("Cantidad", 1)
-        if st.form_submit_button("Registrar"):
+        if st.form_submit_button("Guardar"):
             get_conn().execute("INSERT INTO produccion (fecha, lote, huevos, color_huevo) VALUES (?,?,?,?)", 
                                (f.strftime("%d/%m/%Y"), l, cant, col)).connection.commit(); st.rerun()
 
-# --- 💸 GASTOS ---
-elif menu == "💸 Gastos":
-    st.title("💸 Gastos")
-    with st.form("g"):
-        cat = st.selectbox("Categoría", ["Pienso", "Medicina", "Aves", "Otros"])
-        dest = st.selectbox("Destinado a", ["General", "Gallinas", "Pollos", "Codornices"])
-        con = st.text_input("Concepto"); i = st.number_input("Euros €", 0.0); kg = st.number_input("Kg Pienso", 0.0)
-        f = st.date_input("Fecha")
-        if st.form_submit_button("Guardar"):
-            get_conn().execute("INSERT INTO gastos (fecha, categoria, concepto, cantidad, ilos_pienso, destinado_a) VALUES (?,?,?,?,?,?)",
-                               (f.strftime("%d/%m/%Y"), cat, con, i, kg, dest)).connection.commit(); st.rerun()
-
 # --- 🐣 ALTA AVES ---
 elif menu == "🐣 Alta Aves":
-    st.title("🐣 Registrar Aves")
-    with st.form("alta"):
+    st.title("🐣 Nuevas Aves")
+    with st.form("a"):
         esp = st.selectbox("Especie", ["Gallina", "Codorniz", "Pollo"])
         rz = st.selectbox("Raza", ["Roja", "Blanca", "Huevo Verde", "Campero", "Blanco Engorde", "Codorniz Japónica"])
-        cant = st.number_input("Cantidad", 1); edad = st.number_input("Edad (días)", 0); f_e = st.date_input("Fecha")
-        if st.form_submit_button("Alta"):
-            get_conn().execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, estado) VALUES (?,?,?,?,?,'Activo')", 
-                               (f_e.strftime("%d/%m/%Y"), esp, rz, int(cant), int(edad))).connection.commit(); st.rerun()
+        cant = st.number_input("Cantidad", 1); ed = st.number_input("Edad (días)", 0)
+        f_e = st.date_input("Fecha Entrada")
+        if st.form_submit_button("Dar de Alta"):
+            get_conn().execute("INSERT INTO lotes (fecha, especie, raza, cantidad, edad_inicial, estado) VALUES (?,?,?,?,?, 'Activo')", 
+                               (f_e.strftime("%d/%m/%Y"), esp, rz, int(cant), int(ed))).connection.commit(); st.rerun()
 
 # --- 💾 COPIAS ---
 elif menu == "💾 Copias":
     st.title("💾 Backup")
     with open(DB_PATH, "rb") as f:
-        st.download_button("📥 Bajar Base de Datos (.db)", f, "corral_master.db")
+        st.download_button("📥 Descargar Base de Datos (.db)", f, "corral_master.db")
     sub = st.file_uploader("Subir Backup", type="db")
     if sub and st.button("🚀 Restaurar"):
         with open(DB_PATH, "wb") as f: f.write(sub.getbuffer())
-        st.success("Listo."); st.rerun()
-
-# --- 📜 HISTÓRICO ---
-elif menu == "📜 Histórico":
-    t = st.selectbox("Tabla", ["lotes", "gastos", "produccion", "ventas", "fotos"])
-    df = cargar_tabla(t); st.dataframe(df)
-    idx = st.number_input("Borrar ID", 0)
-    if st.button("Eliminar"): get_conn().execute(f"DELETE FROM {t} WHERE id={idx}").connection.commit(); st.rerun()
+        st.success("Restaurado."); st.rerun()
